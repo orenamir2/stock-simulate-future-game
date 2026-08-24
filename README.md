@@ -19,7 +19,7 @@ npm run dev
 
 The research route invokes `codex exec` in non-interactive, ephemeral, read-only mode and validates its response against `config/stock-analysis.schema.json`, then independently validates and derives all calculated fields in `lib/analysis-engine.ts`. The local schema path resolves from the project working directory unless `STOCK_ANALYSIS_SCHEMA_PATH` overrides it. The child process receives an allowlisted environment and does not use `OPENAI_API_KEY`. Usage is charged against the ChatGPT plan associated with the Codex login and remains subject to that plan's limits.
 
-Research runs use live web search, low reasoning effort, and a 20-minute safety timeout by default. Set `CODEX_REASONING_EFFORT` or `CODEX_TIMEOUT_MS` to tune those operational limits; Kubernetes declares the same defaults in `k8s/deployment.yaml`.
+Research runs use live web search, low reasoning effort, and a 60-minute safety timeout by default. Set `CODEX_REASONING_EFFORT` or `CODEX_TIMEOUT_MS` to tune those operational limits; Kubernetes declares the same defaults in `k8s/deployment.yaml`.
 
 Expected terminal price is `Σ (scenario probability × scenario price) / 100`. Expected total return and expected annualized return are calculated per scenario—including modeled dividends—and then probability-weighted. This avoids presenting the CAGR of the mean terminal price as though it were the mean scenario CAGR. Outputs are uncertain estimates, not investment advice.
 

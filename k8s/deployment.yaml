@@ -46,7 +46,7 @@ spec:
             - name: STOCK_ANALYSIS_SCHEMA_PATH
               value: /app/config/stock-analysis.schema.json
             - name: CODEX_TIMEOUT_MS
-              value: "1200000"
+              value: "3600000"
             - name: CODEX_REASONING_EFFORT
               value: low
           readinessProbe:

@@ -4,7 +4,7 @@ import { AnalysisValidationError, processAnalysis } from "../../../lib/analysis-
 import { researchFrameworkPrompt } from "../../../lib/research-framework";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
-const DEFAULT_CODEX_TIMEOUT_MS = 1_200_000;
+const DEFAULT_CODEX_TIMEOUT_MS = 3_600_000;
 const CODEX_PROGRESS_INTERVAL_MS = 60_000;
 const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
 let researchInProgress = false;
