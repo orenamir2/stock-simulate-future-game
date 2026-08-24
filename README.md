@@ -1,10 +1,10 @@
 # Possible — stock scenario agent
 
-Possible researches a public company and converts the evidence into exactly 20 mutually exclusive, probability-weighted three-year stock-price scenarios. The UI exposes the expected-value math, scenario distribution, research signals, methodology, and source ledger.
+Possible researches a public company and converts the evidence into exactly 20 probability-weighted three-year terminal-price buckets. Each bucket is non-overlapping and the full bucket range covers every non-negative terminal price. The UI exposes the expected-value math, scenario distribution, research signals, methodology, explicit valuation inputs, and source ledger.
 
-Each run answers a fixed 48-question research framework covering the business model, products and customers, market structure, competition and moat, financial quality, balance sheet, management and governance, capital allocation, valuation, risks and regulation, macro/geopolitics, and catalysts/expectations. The result records evidence direction, evidence strength, unanswered questions, and source IDs for every category.
+Each run answers a fixed 48-question research framework covering the business model, products and customers, market structure, competition and moat, financial quality, balance sheet, management and governance, capital allocation, valuation, risks and regulation, macro/geopolitics, and catalysts/expectations. Every answer records answered/partial/unanswered status and claim-level source IDs. Evidence strength and confidence are derived by server code from coverage, primary evidence and source-domain independence; the research model cannot return either score.
 
-Scenario prices are also audited: each scenario must provide target equity value and target diluted shares in matching units, and `price = target equity value / target diluted shares`. Model confidence is calculated by the server from evidence strength, unanswered-question coverage, primary-source share, and source-type diversity; the research model cannot choose its own confidence score.
+The research model returns operating and valuation assumptions, not calculated outputs. Server code derives forecast revenue, the selected valuation metric, enterprise/equity value, FX conversion, per-share price, total return and annualized return. It also converts positive relative-likelihood weights into evidence-shrunk percentages and normalizes them to exactly 100.0%. This is a conservative structural improvement, not a claim of empirical calibration; production-quality probabilities still require stored forecast vintages and walk-forward backtesting.
 
 ## Run locally with ChatGPT Plus
 
@@ -17,9 +17,11 @@ npm install
 npm run dev
 ```
 
-The research route invokes `codex exec` in non-interactive, ephemeral, read-only mode and validates its response against `config/stock-analysis.schema.json`. It does not use `OPENAI_API_KEY`. Usage is charged against the ChatGPT plan associated with the Codex login and remains subject to that plan's limits.
+The research route invokes `codex exec` in non-interactive, ephemeral, read-only mode and validates its response against `config/stock-analysis.schema.json`, then independently validates and derives all calculated fields in `lib/analysis-engine.ts`. The local schema path resolves from the project working directory unless `STOCK_ANALYSIS_SCHEMA_PATH` overrides it. The child process receives an allowlisted environment and does not use `OPENAI_API_KEY`. Usage is charged against the ChatGPT plan associated with the Codex login and remains subject to that plan's limits.
 
-Expected price is `Σ (scenario probability × scenario price) / 100`. Expected three-year return is `(expected price / current price) − 1`; the interface also shows the annualized equivalent. Outputs are uncertain estimates, not investment advice.
+Research runs use live web search, low reasoning effort, and a 20-minute safety timeout by default. Set `CODEX_REASONING_EFFORT` or `CODEX_TIMEOUT_MS` to tune those operational limits; Kubernetes declares the same defaults in `k8s/deployment.yaml`.
+
+Expected terminal price is `Σ (scenario probability × scenario price) / 100`. Expected total return and expected annualized return are calculated per scenario—including modeled dividends—and then probability-weighted. This avoids presenting the CAGR of the mean terminal price as though it were the mean scenario CAGR. Outputs are uncertain estimates, not investment advice.
 
 ## GHCR and local Kubernetes CI/CD
 

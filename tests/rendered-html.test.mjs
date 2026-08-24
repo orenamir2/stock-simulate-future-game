@@ -24,32 +24,44 @@ test("server-renders the scenario product", async () => {
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, framework, schema, layout, packageJson] = await Promise.all([
+  const [page, route, engine, framework, schema, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/analysis-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
     readFile(new URL("../config/stock-analysis.schema.json", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
-  assert.equal((page.match(/probability: \d+/g) ?? []).length, 20);
-  assert.match(page, /sum \+ item\.probability \* item\.price/);
-  assert.match(route, /total !== 100/);
-  assert.match(route, /Math\.abs\(expected - data\.expectedPrice\)/);
+  assert.equal((page.match(/targetPrice/g) ?? []).length, 2);
+  assert.match(page, /expectedTotalReturnPct/);
+  assert.doesNotMatch(page, /setAnalysis\(makeSample\(ticker\)\)/);
+  assert.match(route, /processAnalysis/);
+  assert.match(engine, /normalizeProbabilities/);
+  assert.match(engine, /deriveScenario/);
+  assert.match(engine, /addPriceBuckets/);
+  assert.match(engine, /unexpected fields/);
   assert.match(route, /codex/);
   assert.match(route, /--output-schema/);
   assert.match(route, /--sandbox/);
   assert.match(route, /read-only/);
+  assert.match(route, /web_search="live"/);
+  assert.match(route, /model_reasoning_effort/);
+  assert.match(route, /CodexTimeoutError/);
+  assert.match(route, /status: 504/);
   assert.match(route, /researchInProgress/);
-  assert.match(route, /Research coverage audit failed/);
-  assert.match(route, /Scenario valuation audit failed/);
-  assert.match(route, /calculateConfidence/);
+  assert.match(route, /request\.signal/);
+  assert.doesNotMatch(route, /env: process\.env/);
+  assert.match(engine, /Research coverage audit failed/);
+  assert.match(engine, /calculateConfidence/);
   assert.equal((framework.match(/id: "[a-z-]+"/g) ?? []).length, 12);
   assert.equal((framework.match(/questions: \[/g) ?? []).length, 12);
   assert.match(framework, /What expectations for growth, margins and reinvestment are embedded/);
-  assert.match(schema, /"targetEquityValue"/);
-  assert.match(schema, /"unansweredQuestions"/);
-  assert.match(schema, /"primary"/);
+  assert.match(schema, /"priceAsOf"/);
+  assert.match(schema, /"tradingCurrency"/);
+  assert.match(schema, /"valuationInputs"/);
+  assert.match(schema, /"questionIndex"/);
+  assert.doesNotMatch(schema, /"expectedPrice"/);
   assert.doesNotMatch(route, /OPENAI_API_KEY/);
   assert.match(layout, /Possible/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

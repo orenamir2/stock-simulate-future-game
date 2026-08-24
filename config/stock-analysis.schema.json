@@ -2,13 +2,49 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["ticker", "company", "currentPrice", "expectedPrice", "summary", "scenarios", "signals", "research", "sources"],
+  "required": [
+    "ticker", "company", "exchange", "securityType", "shareClass", "instrumentId", "instrumentIdType",
+    "tradingCurrency", "reportingCurrency", "currentPrice", "priceAsOf", "fiscalDataAsOf", "adrRatio",
+    "currentReportingToTradingFxRate", "fxRateAsOf", "marketDataSourceId", "latestFilingSourceId", "fxSourceId",
+    "summary", "baseline", "scenarios", "signals", "research", "sources"
+  ],
   "properties": {
-    "ticker": { "type": "string" },
-    "company": { "type": "string" },
-    "currentPrice": { "type": "number", "exclusiveMinimum": 0 },
-    "expectedPrice": { "type": "number", "minimum": 0 },
-    "summary": { "type": "string" },
+    "ticker": { "type": "string", "minLength": 1, "maxLength": 12 },
+    "company": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "exchange": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "securityType": { "type": "string", "enum": ["common-stock", "adr", "preferred-stock", "reit", "other"] },
+    "shareClass": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "instrumentId": { "type": "string", "minLength": 1, "maxLength": 100 },
+    "instrumentIdType": { "type": "string", "enum": ["cik", "isin", "sedol", "exchange-symbol", "other"] },
+    "tradingCurrency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "reportingCurrency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "currentPrice": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000000 },
+    "priceAsOf": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}" },
+    "fiscalDataAsOf": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "adrRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 },
+    "currentReportingToTradingFxRate": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 },
+    "fxRateAsOf": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}" },
+    "marketDataSourceId": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "latestFilingSourceId": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "fxSourceId": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 3000 },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scale", "asOf", "revenue", "operatingMarginPct", "freeCashFlowMarginPct", "netIncomeMarginPct", "netCash", "dilutedShares", "balanceSheetValue", "sourceIds"],
+      "properties": {
+        "scale": { "type": "string", "enum": ["millions", "billions"] },
+        "asOf": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "revenue": { "type": "number", "minimum": 0, "maximum": 1000000000 },
+        "operatingMarginPct": { "type": "number", "minimum": -100, "maximum": 100 },
+        "freeCashFlowMarginPct": { "type": "number", "minimum": -100, "maximum": 100 },
+        "netIncomeMarginPct": { "type": "number", "minimum": -100, "maximum": 100 },
+        "netCash": { "type": "number", "minimum": -1000000000, "maximum": 1000000000 },
+        "dilutedShares": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000000 },
+        "balanceSheetValue": { "type": "number", "minimum": 0, "maximum": 1000000000 },
+        "sourceIds": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string" } }
+      }
+    },
     "scenarios": {
       "type": "array",
       "minItems": 20,
@@ -16,17 +52,45 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "probability", "price", "thesis", "type", "targetEquityValue", "targetDilutedShares", "valuationMethod", "keyDrivers", "sourceIds"],
+        "required": ["name", "thesis", "relativeLikelihood", "probabilityRationale", "valuationMethod", "factorStates", "valuationInputs", "keyDrivers", "sourceIds"],
         "properties": {
-          "name": { "type": "string" },
-          "probability": { "type": "integer", "minimum": 0, "maximum": 100 },
-          "price": { "type": "number", "minimum": 0 },
-          "thesis": { "type": "string" },
-          "type": { "type": "string", "enum": ["bull", "base", "bear"] },
-          "targetEquityValue": { "type": "number", "minimum": 0 },
-          "targetDilutedShares": { "type": "number", "exclusiveMinimum": 0 },
-          "valuationMethod": { "type": "string" },
-          "keyDrivers": { "type": "array", "minItems": 2, "maxItems": 5, "items": { "type": "string" } },
+          "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "thesis": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "relativeLikelihood": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 },
+          "probabilityRationale": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "valuationMethod": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "factorStates": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["macro", "industryDemand", "companyExecution", "valuationRegime", "balanceSheet"],
+            "properties": {
+              "macro": { "type": "string", "enum": ["downturn", "steady", "expansion"] },
+              "industryDemand": { "type": "string", "enum": ["contraction", "steady", "growth"] },
+              "companyExecution": { "type": "string", "enum": ["miss", "meet", "beat"] },
+              "valuationRegime": { "type": "string", "enum": ["compression", "steady", "expansion"] },
+              "balanceSheet": { "type": "string", "enum": ["deteriorating", "steady", "improving"] }
+            }
+          },
+          "valuationInputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["revenueCagrPct", "operatingMarginPct", "freeCashFlowMarginPct", "netIncomeMarginPct", "balanceSheetValue", "netCash", "dilutedShares", "reportingToTradingFxRate", "valuationBasis", "valuationMetric", "valuationMultiple", "cumulativeDividendsPerShare"],
+            "properties": {
+              "revenueCagrPct": { "type": "number", "minimum": -100, "maximum": 300 },
+              "operatingMarginPct": { "type": "number", "minimum": -100, "maximum": 100 },
+              "freeCashFlowMarginPct": { "type": "number", "minimum": -100, "maximum": 100 },
+              "netIncomeMarginPct": { "type": "number", "minimum": -100, "maximum": 100 },
+              "balanceSheetValue": { "type": "number", "minimum": 0, "maximum": 1000000000 },
+              "netCash": { "type": "number", "minimum": -1000000000, "maximum": 1000000000 },
+              "dilutedShares": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000000 },
+              "reportingToTradingFxRate": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 },
+              "valuationBasis": { "type": "string", "enum": ["enterprise-value-multiple", "equity-value-multiple", "nav"] },
+              "valuationMetric": { "type": "string", "enum": ["revenue", "ebit", "free-cash-flow", "net-income", "book-value", "nav"] },
+              "valuationMultiple": { "type": "number", "minimum": 0, "maximum": 200 },
+              "cumulativeDividendsPerShare": { "type": "number", "minimum": 0, "maximum": 1000000 }
+            }
+          },
+          "keyDrivers": { "type": "array", "minItems": 2, "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
           "sourceIds": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string" } }
         }
       }
@@ -40,10 +104,10 @@
         "additionalProperties": false,
         "required": ["label", "value", "tone", "detail"],
         "properties": {
-          "label": { "type": "string" },
-          "value": { "type": "string" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "value": { "type": "string", "minLength": 1, "maxLength": 100 },
           "tone": { "type": "string", "enum": ["good", "neutral", "bad"] },
-          "detail": { "type": "string" }
+          "detail": { "type": "string", "minLength": 1, "maxLength": 500 }
         }
       }
     },
@@ -54,13 +118,27 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["categoryId", "score", "evidenceStrength", "finding", "unansweredQuestions", "sourceIds"],
+        "required": ["categoryId", "score", "finding", "questions", "sourceIds"],
         "properties": {
-          "categoryId": { "type": "string" },
+          "categoryId": { "type": "string", "minLength": 1, "maxLength": 80 },
           "score": { "type": "integer", "minimum": -2, "maximum": 2 },
-          "evidenceStrength": { "type": "integer", "minimum": 0, "maximum": 3 },
-          "finding": { "type": "string" },
-          "unansweredQuestions": { "type": "array", "maxItems": 4, "items": { "type": "string" } },
+          "finding": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "questions": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["questionIndex", "status", "answer", "sourceIds"],
+              "properties": {
+                "questionIndex": { "type": "integer", "minimum": 0, "maximum": 3 },
+                "status": { "type": "string", "enum": ["answered", "partial", "unanswered"] },
+                "answer": { "type": "string", "minLength": 1, "maxLength": 1500 },
+                "sourceIds": { "type": "array", "maxItems": 8, "items": { "type": "string" } }
+              }
+            }
+          },
           "sourceIds": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string" } }
         }
       }
@@ -68,19 +146,19 @@
     "sources": {
       "type": "array",
       "minItems": 8,
-      "maxItems": 24,
+      "maxItems": 40,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "title", "publisher", "publishedAt", "url", "type", "primary"],
+        "required": ["id", "title", "publisher", "publishedAt", "accessedAt", "url", "type"],
         "properties": {
-          "id": { "type": "string" },
-          "title": { "type": "string" },
-          "publisher": { "type": "string" },
-          "publishedAt": { "type": "string" },
-          "url": { "type": "string" },
-          "type": { "type": "string", "enum": ["filing", "company", "regulator", "government", "industry", "competitor", "customer", "market", "news"] },
-          "primary": { "type": "boolean" }
+          "id": { "type": "string", "minLength": 1, "maxLength": 40 },
+          "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "publisher": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "publishedAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+          "accessedAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}" },
+          "url": { "type": "string", "minLength": 8, "maxLength": 2000 },
+          "type": { "type": "string", "enum": ["filing", "company", "regulator", "government", "industry", "competitor", "customer", "market", "news"] }
         }
       }
     }

@@ -1,62 +1,78 @@
 import { spawn } from "node:child_process";
-import { researchFramework, researchFrameworkPrompt } from "../../../lib/research-framework";
-
-type Scenario = {
-  name: string;
-  probability: number;
-  price: number;
-  thesis: string;
-  type: "bull" | "base" | "bear";
-  targetEquityValue: number;
-  targetDilutedShares: number;
-  valuationMethod: string;
-  keyDrivers: string[];
-  sourceIds: string[];
-};
-
-type ResearchFinding = {
-  categoryId: string;
-  score: number;
-  evidenceStrength: number;
-  finding: string;
-  unansweredQuestions: string[];
-  sourceIds: string[];
-};
-
-type Source = {
-  id: string;
-  url: string;
-  type: string;
-  primary: boolean;
-};
-
-type Analysis = {
-  ticker: string;
-  company: string;
-  currentPrice: number;
-  expectedPrice: number;
-  summary: string;
-  scenarios: Scenario[];
-  signals: unknown[];
-  research: ResearchFinding[];
-  sources: Source[];
-};
+import { resolve } from "node:path";
+import { AnalysisValidationError, processAnalysis } from "../../../lib/analysis-engine";
+import { researchFrameworkPrompt } from "../../../lib/research-framework";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_CODEX_TIMEOUT_MS = 1_200_000;
+const CODEX_PROGRESS_INTERVAL_MS = 60_000;
+const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
 let researchInProgress = false;
 
-function runCodex(prompt: string): Promise<string> {
+class CodexTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Codex research timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = "CodexTimeoutError";
+  }
+}
+
+function codexTimeoutMs(): number {
+  const configured = Number(process.env.CODEX_TIMEOUT_MS ?? DEFAULT_CODEX_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_CODEX_TIMEOUT_MS;
+}
+
+function codexReasoningEffort(): string {
+  const configured = process.env.CODEX_REASONING_EFFORT?.trim().toLowerCase() ?? "low";
+  return REASONING_EFFORTS.has(configured) ? configured : "low";
+}
+
+function codexEnvironment(): NodeJS.ProcessEnv {
+  const allowed = [
+    "PATH",
+    "CODEX_HOME",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LC_ALL",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+  ];
+  const environment: NodeJS.ProcessEnv = { NODE_ENV: process.env.NODE_ENV ?? "production" };
+  for (const key of allowed) {
+    const value = process.env[key];
+    if (value !== undefined) environment[key] = value;
+  }
+  return environment;
+}
+
+function runCodex(prompt: string, ticker: string, signal?: AbortSignal): Promise<string> {
   const schemaPath =
     process.env.STOCK_ANALYSIS_SCHEMA_PATH ??
-    "/app/config/stock-analysis.schema.json";
-  const timeoutMs = Number(process.env.CODEX_TIMEOUT_MS ?? 600_000);
+    resolve(process.cwd(), "config/stock-analysis.schema.json");
+  const timeoutMs = codexTimeoutMs();
+  const reasoningEffort = codexReasoningEffort();
   const args = [
     "exec",
+    "--ignore-user-config",
+    "--config",
+    'web_search="live"',
+    "--config",
+    `model_reasoning_effort="${reasoningEffort}"`,
+    "--config",
+    'model_verbosity="low"',
     "--ephemeral",
     "--sandbox",
     "read-only",
     "--skip-git-repo-check",
-    "--ignore-user-config",
     "--output-schema",
     schemaPath,
   ];
@@ -66,19 +82,36 @@ function runCodex(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("codex", args, {
       cwd: "/tmp",
-      env: process.env,
+      env: codexEnvironment(),
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
     let settled = false;
+    const startedAt = Date.now();
 
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearInterval(progressTimer);
+      signal?.removeEventListener("abort", abort);
       if (error) reject(error);
-      else resolve(stdout.trim());
+      else {
+        console.info("Codex research completed", {
+          ticker,
+          elapsedMs: Date.now() - startedAt,
+          stdoutBytes: Buffer.byteLength(stdout, "utf8"),
+          stderrBytes: Buffer.byteLength(stderr, "utf8"),
+        });
+        resolve(stdout.trim());
+      }
+    };
+    const abort = () => {
+      child.kill("SIGKILL");
+      const error = new Error("Codex research cancelled");
+      error.name = "AbortError";
+      finish(error);
     };
     const append = (current: string, chunk: Buffer) => {
       const next = current + chunk.toString("utf8");
@@ -90,8 +123,24 @@ function runCodex(prompt: string): Promise<string> {
     };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      finish(new Error("Codex research timed out"));
-    }, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 600_000);
+      finish(new CodexTimeoutError(timeoutMs));
+    }, timeoutMs);
+    const progressTimer = setInterval(() => {
+      console.info("Codex research still running", {
+        ticker,
+        elapsedMs: Date.now() - startedAt,
+        stdoutBytes: Buffer.byteLength(stdout, "utf8"),
+        stderrBytes: Buffer.byteLength(stderr, "utf8"),
+      });
+    }, CODEX_PROGRESS_INTERVAL_MS);
+    progressTimer.unref();
+
+    console.info("Codex research started", {
+      ticker,
+      timeoutMs,
+      reasoningEffort,
+      webSearch: "live",
+    });
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdout = append(stdout, chunk);
@@ -114,67 +163,14 @@ function runCodex(prompt: string): Promise<string> {
       finish();
     });
 
+    if (signal?.aborted) {
+      abort();
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+
     child.stdin.end(prompt);
   });
-}
-
-function auditAnalysis(data: Analysis, requestedTicker: string): string | null {
-  if (data.ticker.toUpperCase() !== requestedTicker) return "Ticker mismatch";
-  if (!Array.isArray(data.scenarios) || data.scenarios.length !== 20) {
-    return "Scenario count audit failed";
-  }
-  if (!Array.isArray(data.signals) || data.signals.length !== 4) {
-    return "Signal count audit failed";
-  }
-  if (!Array.isArray(data.sources) || data.sources.length < 8) {
-    return "Source count audit failed";
-  }
-  if (data.sources.some(({ url }) => !/^https?:\/\//i.test(url))) {
-    return "Source URL audit failed";
-  }
-  const total = data.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0);
-  const expected =
-    data.scenarios.reduce(
-      (sum, scenario) => sum + scenario.probability * scenario.price,
-      0,
-    ) / 100;
-  if (total !== 100 || Math.abs(expected - data.expectedPrice) > 0.1) {
-    return "Probability audit failed";
-  }
-  const categoryIds = new Set(researchFramework.map(({ id }) => id));
-  const returnedCategories = new Set(data.research?.map(({ categoryId }) => categoryId));
-  if (
-    !Array.isArray(data.research) ||
-    data.research.length !== researchFramework.length ||
-    returnedCategories.size !== categoryIds.size ||
-    [...categoryIds].some((id) => !returnedCategories.has(id))
-  ) {
-    return "Research coverage audit failed";
-  }
-  const sourceIds = new Set(data.sources.map(({ id }) => id));
-  const badReference = [...data.research, ...data.scenarios].some(
-    (item) => !item.sourceIds.length || item.sourceIds.some((id) => !sourceIds.has(id)),
-  );
-  if (sourceIds.size !== data.sources.length || badReference) {
-    return "Source reference audit failed";
-  }
-  const badValuation = data.scenarios.some(({ price, targetEquityValue, targetDilutedShares }) => {
-    const calculatedPrice = targetEquityValue / targetDilutedShares;
-    return Math.abs(calculatedPrice - price) > Math.max(0.5, price * 0.005);
-  });
-  if (badValuation) return "Scenario valuation audit failed";
-  return null;
-}
-
-function calculateConfidence(data: Analysis): number {
-  const averageStrength =
-    data.research.reduce((sum, item) => sum + item.evidenceStrength, 0) /
-    (data.research.length * 3);
-  const primaryShare = data.sources.filter(({ primary }) => primary).length / data.sources.length;
-  const sourceDiversity = Math.min(new Set(data.sources.map(({ type }) => type)).size / 6, 1);
-  const unanswered = data.research.reduce((sum, item) => sum + item.unansweredQuestions.length, 0);
-  const completeness = Math.max(0, 1 - unanswered / (data.research.length * 4));
-  return Math.round(averageStrength * 50 + primaryShare * 20 + sourceDiversity * 15 + completeness * 15);
 }
 
 export async function POST(request: Request) {
@@ -197,29 +193,48 @@ export async function POST(request: Request) {
 
   researchInProgress = true;
   try {
-    const prompt = `Act as a skeptical, evidence-led public-equity scenario analyst. Research ${ticker} using current web sources and built-in web search. Do not run shell commands or modify files.
+    const prompt = `Act as a skeptical, evidence-led public-equity scenario analyst. Research ${ticker} using current web sources and built-in web search. Do not run shell commands or modify files. The server—not you—calculates probabilities, valuation outputs, confidence and returns.
 
 RESEARCH RULES
-- Identify the exact security, reporting currency, fresh price and price timestamp.
+- Resolve the exact security: exchange, security type, share class, durable instrument ID, trading currency, reporting currency, ADR ratio, fresh price and ISO-8601 price timestamp. Cite the exact market-data source ID.
+- State the latest fiscal-data date. Populate baseline with trailing-twelve-month financials in reporting currency and one consistent scale. dilutedShares must use the same millions/billions scale as the monetary values and, for an ADR, must represent traded depositary-share equivalents after applying adrRatio.
+- Set currentReportingToTradingFxRate and each scenario reportingToTradingFxRate to 1 when currencies match. Otherwise cite a fresh FX source and use reporting-currency value × FX rate = trading-currency value.
 - Locate the latest filing and earnings release plus enough prior filings to evaluate at least 10 quarters. Prefer filings, regulators, government data, company materials and competitor filings over summaries.
-- Triangulate management claims with independent customer, competitor, industry or government evidence. Never invent a metric; record important missing data in unansweredQuestions.
-- Complete every category below exactly once. score means evidence direction (-2 strongly negative, -1 negative, 0 mixed/neutral, 1 positive, 2 strongly positive). evidenceStrength means 0 no usable evidence, 1 weak/single source, 2 adequate/partly triangulated, 3 strong/primary and triangulated.
-- Each finding and scenario must cite valid IDs from the source ledger. Use direct working HTTP(S) URLs, exact publication dates when available, and honestly mark whether each source is primary.
+- Triangulate management claims with independent customer, competitor, industry or government evidence. Never invent a metric; mark missing evidence with partial or unanswered status and explain the gap in answer.
+- Complete every category below exactly once and answer each of its four questions using questionIndex 0–3 exactly once. status is answered, partial or unanswered. An answered question must cite evidence. score means evidence direction (-2 strongly negative, -1 negative, 0 mixed/neutral, 1 positive, 2 strongly positive). The server derives evidence strength and unanswered-question coverage.
+- Each finding and scenario must cite valid IDs from the source ledger. Use exact document URLs rather than search pages or generic homepages. publishedAt must be YYYY-MM-DD and accessedAt must be an ISO-8601 timestamp. The server derives primary-source status from source type.
 
 ${researchFrameworkPrompt}
 
 SCENARIO AND VALUATION RULES
-- Create exactly 20 collectively exhaustive, mutually exclusive three-year scenarios. Avoid double-counting correlated events: combine them in a scenario where appropriate.
-- Start from base rates and the evidence scorecard; do not treat possibility as probability. Probabilities are integers totaling exactly 100.
-- For every scenario state 2–5 measurable key drivers and a suitable valuation method. Estimate target equity value and target diluted shares in the SAME unit (for example USD billions and billions of shares), then set price = targetEquityValue / targetDilutedShares. The server audits this identity.
-- Include dilution/buybacks, net cash/debt and cyclicality in target equity value. Use sector-appropriate methods (DCF, earnings/FCF multiple, book value, NAV or sum-of-parts), with different assumptions across bear/base/bull cases.
-- Compute expectedPrice exactly as sum(probability * price) / 100. Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice.
-- Return only the JSON object required by the supplied schema. Confidence is calculated by the server from evidence strength, unanswered questions, primary-source share and source diversity; do not return confidence.`;
-    const data = JSON.parse(await runCodex(prompt)) as Analysis;
-    const auditError = auditAnalysis(data, ticker);
-    if (auditError) return Response.json({ error: auditError }, { status: 422 });
-    return Response.json({ ...data, confidence: calculateConfidence(data), live: true, engine: "codex-cli" });
+- Create exactly 20 three-year outcome representatives. Each must use a unique complete factorStates vector so correlated events are modeled together rather than double-counted as standalone scenarios. The server sorts derived prices into contiguous, non-overlapping terminal-price buckets that collectively cover all non-negative prices.
+- Do not return a probability. Return only a positive relativeLikelihood supported by a probabilityRationale grounded in base rates and cited evidence. The server shrinks these weights toward equal priors according to independently derived evidence quality, then normalizes them to 100.0%.
+- Do not return price, target equity value, target enterprise value, expected price, return, type or confidence. The server derives all of them.
+- For each scenario provide explicit valuationInputs. forecast revenue is server-derived from baseline revenue and three years of revenueCagrPct. For enterprise-value-multiple use revenue, EBIT or free cash flow; server calculates EV = metric × multiple and equity = EV + net cash. For equity-value-multiple use net income or book value; server calculates equity = metric × multiple. For NAV use NAV or book value. The server then converts reporting currency to trading currency and divides by diluted shares.
+- Model dilution/buybacks in dilutedShares, balance-sheet change in netCash or balanceSheetValue, FX in reportingToTradingFxRate, and dividends in cumulativeDividendsPerShare. Use sector-appropriate metrics and materially different assumptions across cases.
+- Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice. Return only the JSON object required by the supplied schema.`;
+    const raw = JSON.parse(await runCodex(prompt, ticker, request.signal)) as unknown;
+    const data = processAnalysis(raw, ticker);
+    return Response.json({ ...data, live: true, engine: "codex-cli" });
   } catch (error) {
+    if (error instanceof AnalysisValidationError) {
+      return Response.json({ error: error.message }, { status: 422 });
+    }
+    if (error instanceof Error && error.name === "AbortError") {
+      return Response.json({ error: "Research cancelled" }, { status: 499 });
+    }
+    if (error instanceof CodexTimeoutError) {
+      console.error("Codex research timed out", {
+        ticker,
+        timeoutMs: error.timeoutMs,
+      });
+      return Response.json(
+        {
+          error: `Research for ${ticker} exceeded the ${Math.round(error.timeoutMs / 60_000)}-minute limit. Please retry.`,
+        },
+        { status: 504 },
+      );
+    }
     console.error("Codex research failed", error);
     return Response.json(
       { error: "Codex research failed. Check the pod logs and subscription authentication." },
