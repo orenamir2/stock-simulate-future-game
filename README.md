@@ -2,43 +2,49 @@
 
 Possible researches a public company and converts the evidence into exactly 20 mutually exclusive, probability-weighted three-year stock-price scenarios. The UI exposes the expected-value math, scenario distribution, research signals, methodology, and source ledger.
 
-## Run locally
+## Run locally with ChatGPT Plus
+
+Install and authenticate Codex CLI, then start the app:
 
 ```bash
+npm install --global @openai/codex@0.144.4
+codex login
 npm install
 npm run dev
 ```
 
-The app opens with an illustrative AAPL dataset. For live research, add `OPENAI_API_KEY` to `.env.local`. You can optionally set `OPENAI_MODEL`; it defaults to `gpt-5.5`.
-
-The research route uses the OpenAI Responses API with web search and strict structured output. It prioritizes SEC and investor-relations sources, audits that all 20 probabilities total 100%, and independently recalculates the expected price before returning the result.
+The research route invokes `codex exec` in non-interactive, ephemeral, read-only mode and validates its response against `config/stock-analysis.schema.json`. It does not use `OPENAI_API_KEY`. Usage is charged against the ChatGPT plan associated with the Codex login and remains subject to that plan's limits.
 
 Expected price is `Σ (scenario probability × scenario price) / 100`. Expected three-year return is `(expected price / current price) − 1`; the interface also shows the annualized equivalent. Outputs are uncertain estimates, not investment advice.
 
-## Container and local Kubernetes CI/CD
+## GHCR and local Kubernetes CI/CD
 
 Every pull request runs the production build and tests. Every push to `main` then:
 
-1. Builds the image for both `linux/amd64` and `linux/arm64`.
-2. Publishes immutable SHA and `latest` tags to `ghcr.io/orenamir2/stock-simulate-future-game`.
-3. Produces SBOM and provenance attestations.
-4. Deploys the exact published digest to the `possible` namespace on local Kubernetes.
-5. Waits for the `/api/health` readiness check and rollout to succeed.
+1. Builds the image for `linux/amd64` and `linux/arm64`, including the pinned Codex CLI.
+2. Publishes immutable SHA and `latest` tags to `ghcr.io/orenamir2/stock-simulate-future-game` with SBOM and provenance.
+3. Uses the self-hosted macOS ARM64 runner to create `possible/codex-auth-bootstrap` from the runner's local Codex login.
+4. Deploys the exact GHCR digest to local Kubernetes.
+5. Verifies both Codex subscription authentication and application health.
 
-The deployment job needs a self-hosted GitHub Actions runner because a GitHub-hosted runner cannot reach Kubernetes on your laptop. In the repository, open **Settings → Actions → Runners → New self-hosted runner** and register the macOS ARM64 machine that can run `kubectl`. The workflow targets GitHub's standard `self-hosted`, `macOS`, and `ARM64` labels. The runner must have `kubectl` installed and access to the intended kubeconfig.
+The GHCR image never contains `auth.json`. Kubernetes mounts the credential as a read-only secret, and an init container copies it into a writable in-memory `CODEX_HOME` so Codex can refresh its tokens. The credential disappears when the pod is deleted.
 
-Configure these GitHub repository settings:
+The self-hosted runner must have `kubectl` and access to the `docker-desktop` context. Run `codex login` as the same operating-system user that runs the runner. If its authentication file is elsewhere, set the repository variable `LOCAL_CODEX_AUTH_FILE` to its absolute path. `LOCAL_KUBE_CONTEXT` is optional and defaults to `docker-desktop`.
 
-- Environment: `local-k8s` (optional approval protection can be enabled).
-- Variable: `LOCAL_KUBE_CONTEXT`, normally `docker-desktop`.
-- Secret: `OPENAI_API_KEY` to enable live research; omit it for illustrative mode.
-- Secret: `GHCR_PAT` with `read:packages` is recommended for durable image pulls. If omitted, the workflow uses its short-lived `GITHUB_TOKEN` and refreshes the pull secret on every deployment.
+For private GHCR pulls, configure repository secret `GHCR_PAT` with `read:packages`. If omitted, the deployment job refreshes the pull secret using its GitHub token.
 
-The app is exposed through Docker Desktop's local load balancer at `http://localhost:8080`. Change `k8s/service.yaml` if that port is already in use.
+The app is exposed locally at `http://localhost:8080`.
 
-To run the container without Kubernetes:
+## Manual container test
+
+Never copy `auth.json` into an image. Mount a disposable writable Codex home instead:
 
 ```bash
 docker build -t possible:local .
-docker run --rm -p 3000:3000 -e OPENAI_API_KEY possible:local
+docker run --rm -p 3000:3000 \
+  -e CODEX_HOME=/var/lib/codex \
+  -v "$HOME/.codex:/var/lib/codex" \
+  possible:local
 ```
+
+Keep this deployment private. The route validates tickers, permits one research run at a time, and runs Codex in a read-only sandbox, but a personal ChatGPT credential is still inappropriate for an internet-facing multi-user service.

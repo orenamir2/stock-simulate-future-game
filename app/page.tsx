@@ -68,14 +68,14 @@ export default function Home() {
   const ranges = useMemo(() => { const result = { bull: 0, base: 0, bear: 0 }; analysis.scenarios.forEach((s) => result[s.type] += s.probability); return result; }, [analysis]);
 
   async function runAnalysis(event: FormEvent) {
-    event.preventDefault(); const ticker = query.trim().toUpperCase(); if (!/^[A-Z.\-]{1,8}$/.test(ticker)) return;
+    event.preventDefault(); const ticker = query.trim().toUpperCase(); if (!/^[A-Z.-]{1,8}$/.test(ticker)) return;
     setRunning(true); setStage(0); setExpanded(null);
     const timer = window.setInterval(() => setStage((value) => Math.min(value + 1, stages.length - 1)), 1000);
     try {
       const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticker }) });
       if (!response.ok) throw new Error("Research service unavailable"); const next = await response.json() as Analysis;
-      setAnalysis(next); setNotice(next.live ? "Live web research" : "Illustrative dataset");
-    } catch { setAnalysis(makeSample(ticker)); setNotice("Illustrative dataset — add OPENAI_API_KEY for live research"); }
+      setAnalysis(next); setNotice(next.live ? "Live Codex web research" : "Illustrative dataset");
+    } catch { setAnalysis(makeSample(ticker)); setNotice("Illustrative dataset — Codex research is unavailable"); }
     finally { window.clearInterval(timer); setStage(stages.length - 1); window.setTimeout(() => setRunning(false), 450); }
   }
 

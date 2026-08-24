@@ -41,14 +41,12 @@ spec:
           env:
             - name: PORT
               value: "3000"
-            - name: OPENAI_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: possible-secrets
-                  key: OPENAI_API_KEY
-                  optional: true
-            - name: OPENAI_MODEL
-              value: gpt-5.5
+            - name: CODEX_HOME
+              value: /var/lib/codex
+            - name: STOCK_ANALYSIS_SCHEMA_PATH
+              value: /app/config/stock-analysis.schema.json
+            - name: CODEX_TIMEOUT_MS
+              value: "600000"
           readinessProbe:
             httpGet:
               path: /api/health
@@ -81,6 +79,34 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: codex-home
+              mountPath: /var/lib/codex
+      initContainers:
+        - name: prepare-codex-auth
+          image: ghcr.io/orenamir2/stock-simulate-future-game:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - install -m 600 /codex-auth-source/auth.json /var/lib/codex/auth.json
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: codex-auth-source
+              mountPath: /codex-auth-source
+              readOnly: true
+            - name: codex-home
+              mountPath: /var/lib/codex
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: codex-home
+          emptyDir:
+            medium: Memory
+        - name: codex-auth-source
+          secret:
+            secretName: codex-auth-bootstrap
+            defaultMode: 0440

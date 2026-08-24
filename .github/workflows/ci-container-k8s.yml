@@ -1,4 +1,4 @@
-name: CI, container, and local Kubernetes
+name: CI, GHCR container, and local Kubernetes
 
 on:
   pull_request:
@@ -71,7 +71,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=Possible
-            org.opencontainers.image.description=Probability-weighted stock scenario research agent
+            org.opencontainers.image.description=Probability-weighted stock scenario research agent with Codex CLI
       - name: Build and push image
         id: push
         uses: docker/build-push-action@v7
@@ -102,10 +102,10 @@ jobs:
       packages: read
     environment: local-k8s
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GHCR_PAT: ${{ secrets.GHCR_PAT }}
       FALLBACK_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       KUBE_CONTEXT: ${{ vars.LOCAL_KUBE_CONTEXT }}
+      CODEX_AUTH_FILE: ${{ vars.LOCAL_CODEX_AUTH_FILE }}
     steps:
       - name: Check out deployment manifests
         uses: actions/checkout@v6
@@ -126,22 +126,36 @@ jobs:
             --docker-username="${GITHUB_ACTOR}" \
             --docker-password="$password" \
             --dry-run=client -o yaml | kubectl apply -f -
-      - name: Refresh optional research secret
-        if: env.OPENAI_API_KEY != ''
+      - name: Refresh ChatGPT subscription authentication
         shell: bash
         run: |
-          kubectl -n possible create secret generic possible-secrets \
-            --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY" \
+          auth_file="${CODEX_AUTH_FILE:-$HOME/.codex/auth.json}"
+          if [[ ! -s "$auth_file" ]]; then
+            echo "Codex authentication was not found at $auth_file" >&2
+            echo "Run 'codex login' as the local runner user or set LOCAL_CODEX_AUTH_FILE." >&2
+            exit 1
+          fi
+          kubectl -n possible create secret generic codex-auth-bootstrap \
+            --from-file=auth.json="$auth_file" \
             --dry-run=client -o yaml | kubectl apply -f -
       - name: Apply Kubernetes resources
         run: kubectl apply -k k8s
-      - name: Pin deployment to published digest
+      - name: Pin deployment and init container to published digest
         env:
           IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
-        run: kubectl -n possible set image deployment/possible possible="$IMAGE"
+        run: |
+          kubectl -n possible set image deployment/possible \
+            possible="$IMAGE" \
+            prepare-codex-auth="$IMAGE"
       - name: Wait for healthy rollout
-        run: kubectl -n possible rollout status deployment/possible --timeout=5m
+        run: kubectl -n possible rollout status deployment/possible --timeout=10m
+      - name: Verify Codex authentication and application health
+        shell: bash
+        run: |
+          pod="$(kubectl -n possible get pod -l app.kubernetes.io/name=possible -o jsonpath='{.items[0].metadata.name}')"
+          kubectl -n possible exec "$pod" -- codex login status
+          curl --fail --silent --show-error http://localhost:8080/api/health
       - name: Show deployed endpoint
         run: |
           kubectl -n possible get deployment,pods,service
-          echo "Possible is available through the local LoadBalancer at http://localhost:8080."
+          echo "Possible is available at http://localhost:8080."

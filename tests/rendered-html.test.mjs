@@ -34,8 +34,12 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(page, /sum \+ item\.probability \* item\.price/);
   assert.match(route, /total !== 100/);
   assert.match(route, /Math\.abs\(expected - data\.expectedPrice\)/);
-  assert.match(route, /tools: \[\{ type: "web_search" \}\]/);
-  assert.match(route, /OPENAI_API_KEY/);
+  assert.match(route, /codex/);
+  assert.match(route, /--output-schema/);
+  assert.match(route, /--sandbox/);
+  assert.match(route, /read-only/);
+  assert.match(route, /researchInProgress/);
+  assert.doesNotMatch(route, /OPENAI_API_KEY/);
   assert.match(layout, /Possible/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 });
@@ -49,13 +53,18 @@ test("ships container and Kubernetes delivery guardrails", async () => {
     readFile(new URL("../app/api/health/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(dockerfile, /USER 1000:1000/);
+  assert.match(dockerfile, /@openai\/codex/);
+  assert.match(workflow, /ghcr\.io/);
   assert.match(workflow, /packages: write/);
+  assert.match(workflow, /codex-auth-bootstrap/);
   assert.match(workflow, /runs-on: \[self-hosted, macOS, ARM64\]/);
   assert.match(workflow, /group: possible-production-\$\{\{ github\.ref \}\}/);
   assert.match(workflow, /set image deployment\/possible/);
   assert.match(workflow, /rollout status deployment\/possible/);
   assert.match(deployment, /readOnlyRootFilesystem: true/);
   assert.match(deployment, /runAsUser: 1000/);
+  assert.match(deployment, /ghcr-pull/);
+  assert.match(deployment, /codex-auth-source/);
   assert.match(deployment, /path: \/api\/health/);
   assert.match(service, /type: LoadBalancer/);
   assert.match(service, /port: 8080/);
