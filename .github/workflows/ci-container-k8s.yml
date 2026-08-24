@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: possible-production
+  group: possible-production-${{ github.ref }}
   cancel-in-progress: true
 
 env:

@@ -50,6 +50,7 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(dockerfile, /USER 1000:1000/);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /runs-on: \[self-hosted, macOS, ARM64\]/);
+  assert.match(workflow, /group: possible-production-\$\{\{ github\.ref \}\}/);
   assert.match(workflow, /set image deployment\/possible/);
   assert.match(workflow, /rollout status deployment\/possible/);
   assert.match(deployment, /readOnlyRootFilesystem: true/);
