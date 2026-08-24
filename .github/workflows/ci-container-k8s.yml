@@ -1,0 +1,147 @@
+name: CI, container, and local Kubernetes
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: possible-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.14.0
+          cache: npm
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Run production build and tests
+        run: npm test
+
+  publish:
+    name: Publish immutable image to GHCR
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Sign in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Possible
+            org.opencontainers.image.description=Probability-weighted stock scenario research agent
+      - name: Build and push image
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+      - name: Attest image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  deploy:
+    name: Deploy to local Kubernetes
+    if: github.event_name != 'pull_request'
+    needs: publish
+    runs-on: [self-hosted, local-k8s]
+    permissions:
+      contents: read
+      packages: read
+    environment: local-k8s
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GHCR_PAT: ${{ secrets.GHCR_PAT }}
+      FALLBACK_GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      KUBE_CONTEXT: ${{ vars.LOCAL_KUBE_CONTEXT }}
+    steps:
+      - name: Check out deployment manifests
+        uses: actions/checkout@v6
+      - name: Select and verify local cluster
+        shell: bash
+        run: |
+          context="${KUBE_CONTEXT:-docker-desktop}"
+          kubectl config use-context "$context"
+          kubectl cluster-info
+      - name: Create namespace
+        run: kubectl apply -f k8s/namespace.yaml
+      - name: Refresh GHCR pull credentials
+        shell: bash
+        run: |
+          password="${GHCR_PAT:-$FALLBACK_GHCR_TOKEN}"
+          kubectl -n possible create secret docker-registry ghcr-pull \
+            --docker-server=ghcr.io \
+            --docker-username="${GITHUB_ACTOR}" \
+            --docker-password="$password" \
+            --dry-run=client -o yaml | kubectl apply -f -
+      - name: Refresh optional research secret
+        if: env.OPENAI_API_KEY != ''
+        shell: bash
+        run: |
+          kubectl -n possible create secret generic possible-secrets \
+            --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
+      - name: Apply Kubernetes resources
+        run: kubectl apply -k k8s
+      - name: Pin deployment to published digest
+        env:
+          IMAGE: ${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}
+        run: kubectl -n possible set image deployment/possible possible="$IMAGE"
+      - name: Wait for healthy rollout
+        run: kubectl -n possible rollout status deployment/possible --timeout=5m
+      - name: Show deployed endpoint
+        run: |
+          kubectl -n possible get deployment,pods,service
+          echo "Possible is available on the local Kubernetes node at port 30080."
