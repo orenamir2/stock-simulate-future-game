@@ -60,10 +60,22 @@ test("requires evidence for every answered research question", () => {
   assert.throws(() => processFixture(raw), /answered question without evidence/);
 });
 
-test("rejects duplicate source URLs and ticker mismatches", () => {
+test("merges duplicate source URLs and remaps every citation", () => {
   const duplicate = makeRawAnalysis();
-  duplicate.sources[1].url = duplicate.sources[0].url;
-  assert.throws(() => processFixture(duplicate), /Source URLs must be unique/);
+  duplicate.sources[1].url = `${duplicate.sources[0].url}#financials`;
+  const result = processFixture(duplicate);
+  assert.equal(result.sources.length, 7);
+  assert.deepEqual(result.baseline.sourceIds, ["s1"]);
+  assert.ok(result.scenarios.every(({ sourceIds }) => !sourceIds.includes("s2")));
+  assert.ok(result.research.every(({ sourceIds, questions }) =>
+    !sourceIds.includes("s2") && questions.every((question) => !question.sourceIds.includes("s2"))
+  ));
+});
+
+test("still rejects duplicate source IDs and ticker mismatches", () => {
+  const duplicate = makeRawAnalysis();
+  duplicate.sources[1].id = duplicate.sources[0].id;
+  assert.throws(() => processFixture(duplicate), /Source IDs must be unique/);
   assert.throws(() => processAnalysis(makeRawAnalysis(), "OTHER", fixtureNow), /Ticker mismatch/);
 });
 

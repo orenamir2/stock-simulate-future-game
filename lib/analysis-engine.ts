@@ -354,6 +354,72 @@ function sourceDomain(url: string): string {
   return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
 }
 
+function canonicalSourceUrl(url: string): string {
+  const parsed = new URL(url);
+  parsed.hash = "";
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (/^utm_/i.test(key) || ["fbclid", "gclid", "mc_cid", "mc_eid"].includes(key.toLowerCase())) {
+      parsed.searchParams.delete(key);
+    }
+  }
+  parsed.searchParams.sort();
+  if (parsed.pathname.length > 1 && parsed.pathname.endsWith("/")) {
+    parsed.pathname = parsed.pathname.slice(0, -1);
+  }
+  return parsed.toString();
+}
+
+function remapSourceIds(ids: string[], aliases: Map<string, string>): string[] {
+  return [...new Set(ids.map((id) => aliases.get(id) ?? id))];
+}
+
+function mergeDuplicateSources(raw: RawAnalysis): RawAnalysis {
+  const retainedByUrl = new Map<string, string>();
+  const aliases = new Map<string, string>();
+  const sources: RawAnalysis["sources"] = [];
+  const merges: Array<{ retainedId: string; removedId: string; url: string }> = [];
+
+  for (const source of raw.sources) {
+    const key = canonicalSourceUrl(source.url);
+    const retainedId = retainedByUrl.get(key);
+    if (!retainedId) {
+      retainedByUrl.set(key, source.id);
+      aliases.set(source.id, source.id);
+      sources.push(source);
+      continue;
+    }
+    aliases.set(source.id, retainedId);
+    merges.push({ retainedId, removedId: source.id, url: source.url });
+  }
+
+  if (merges.length === 0) return raw;
+  console.warn("Merged duplicate analysis sources", { count: merges.length, merges });
+
+  return {
+    ...raw,
+    marketDataSourceId: aliases.get(raw.marketDataSourceId) ?? raw.marketDataSourceId,
+    latestFilingSourceId: aliases.get(raw.latestFilingSourceId) ?? raw.latestFilingSourceId,
+    fxSourceId: aliases.get(raw.fxSourceId) ?? raw.fxSourceId,
+    baseline: {
+      ...raw.baseline,
+      sourceIds: remapSourceIds(raw.baseline.sourceIds, aliases),
+    },
+    scenarios: raw.scenarios.map((scenario) => ({
+      ...scenario,
+      sourceIds: remapSourceIds(scenario.sourceIds, aliases),
+    })),
+    research: raw.research.map((finding) => ({
+      ...finding,
+      sourceIds: remapSourceIds(finding.sourceIds, aliases),
+      questions: finding.questions.map((question) => ({
+        ...question,
+        sourceIds: remapSourceIds(question.sourceIds, aliases),
+      })),
+    })),
+    sources,
+  };
+}
+
 function deriveEvidenceStrength(finding: RawResearchFinding, sourceMap: Map<string, Source>): number {
   const referenced = new Set([...finding.sourceIds, ...finding.questions.flatMap(({ sourceIds }) => sourceIds)]);
   const sources = [...referenced].map((id) => sourceMap.get(id)).filter((source): source is Source => Boolean(source));
@@ -494,7 +560,10 @@ function addPriceBuckets(scenarios: Array<Omit<Scenario, "priceRangeMin" | "pric
 }
 
 export function processAnalysis(value: unknown, requestedTicker: string, now = new Date()): Analysis {
-  const raw = parseRawAnalysis(value);
+  const parsed = parseRawAnalysis(value);
+  const parsedSourceIds = new Set(parsed.sources.map(({ id }) => id));
+  if (parsedSourceIds.size !== parsed.sources.length) fail("Source IDs must be unique");
+  const raw = mergeDuplicateSources(parsed);
   if (raw.ticker !== requestedTicker.toUpperCase()) fail("Ticker mismatch");
   if (!CURRENCY.test(raw.tradingCurrency) || !CURRENCY.test(raw.reportingCurrency)) {
     fail("Trading and reporting currencies must be ISO 4217 codes");
@@ -515,9 +584,6 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   if (nowMs - fiscalDataAsOfMs > 550 * 24 * 60 * 60_000) fail("Fiscal baseline is stale");
 
   const sourceIds = new Set(raw.sources.map(({ id }) => id));
-  const sourceUrls = new Set(raw.sources.map(({ url }) => url));
-  if (sourceIds.size !== raw.sources.length) fail("Source IDs must be unique");
-  if (sourceUrls.size !== raw.sources.length) fail("Source URLs must be unique");
   for (const id of [raw.marketDataSourceId, raw.latestFilingSourceId, raw.fxSourceId]) {
     if (!sourceIds.has(id)) fail("Instrument metadata references an unknown source ID");
   }
