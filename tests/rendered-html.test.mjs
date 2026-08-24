@@ -24,9 +24,11 @@ test("server-renders the scenario product", async () => {
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, layout, packageJson] = await Promise.all([
+  const [page, route, framework, schema, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
+    readFile(new URL("../config/stock-analysis.schema.json", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -39,6 +41,15 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /--sandbox/);
   assert.match(route, /read-only/);
   assert.match(route, /researchInProgress/);
+  assert.match(route, /Research coverage audit failed/);
+  assert.match(route, /Scenario valuation audit failed/);
+  assert.match(route, /calculateConfidence/);
+  assert.equal((framework.match(/id: "[a-z-]+"/g) ?? []).length, 12);
+  assert.equal((framework.match(/questions: \[/g) ?? []).length, 12);
+  assert.match(framework, /What expectations for growth, margins and reinvestment are embedded/);
+  assert.match(schema, /"targetEquityValue"/);
+  assert.match(schema, /"unansweredQuestions"/);
+  assert.match(schema, /"primary"/);
   assert.doesNotMatch(route, /OPENAI_API_KEY/);
   assert.match(layout, /Possible/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

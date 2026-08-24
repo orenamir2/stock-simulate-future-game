@@ -2,13 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["ticker", "company", "currentPrice", "expectedPrice", "confidence", "summary", "scenarios", "signals", "sources"],
+  "required": ["ticker", "company", "currentPrice", "expectedPrice", "summary", "scenarios", "signals", "research", "sources"],
   "properties": {
     "ticker": { "type": "string" },
     "company": { "type": "string" },
     "currentPrice": { "type": "number", "exclusiveMinimum": 0 },
     "expectedPrice": { "type": "number", "minimum": 0 },
-    "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
     "summary": { "type": "string" },
     "scenarios": {
       "type": "array",
@@ -17,13 +16,18 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "probability", "price", "thesis", "type"],
+        "required": ["name", "probability", "price", "thesis", "type", "targetEquityValue", "targetDilutedShares", "valuationMethod", "keyDrivers", "sourceIds"],
         "properties": {
           "name": { "type": "string" },
           "probability": { "type": "integer", "minimum": 0, "maximum": 100 },
           "price": { "type": "number", "minimum": 0 },
           "thesis": { "type": "string" },
-          "type": { "type": "string", "enum": ["bull", "base", "bear"] }
+          "type": { "type": "string", "enum": ["bull", "base", "bear"] },
+          "targetEquityValue": { "type": "number", "minimum": 0 },
+          "targetDilutedShares": { "type": "number", "exclusiveMinimum": 0 },
+          "valuationMethod": { "type": "string" },
+          "keyDrivers": { "type": "array", "minItems": 2, "maxItems": 5, "items": { "type": "string" } },
+          "sourceIds": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string" } }
         }
       }
     },
@@ -43,19 +47,40 @@
         }
       }
     },
-    "sources": {
+    "research": {
       "type": "array",
-      "minItems": 3,
+      "minItems": 12,
       "maxItems": 12,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "publisher", "age", "url"],
+        "required": ["categoryId", "score", "evidenceStrength", "finding", "unansweredQuestions", "sourceIds"],
         "properties": {
+          "categoryId": { "type": "string" },
+          "score": { "type": "integer", "minimum": -2, "maximum": 2 },
+          "evidenceStrength": { "type": "integer", "minimum": 0, "maximum": 3 },
+          "finding": { "type": "string" },
+          "unansweredQuestions": { "type": "array", "maxItems": 4, "items": { "type": "string" } },
+          "sourceIds": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string" } }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "publisher", "publishedAt", "url", "type", "primary"],
+        "properties": {
+          "id": { "type": "string" },
           "title": { "type": "string" },
           "publisher": { "type": "string" },
-          "age": { "type": "string" },
-          "url": { "type": "string" }
+          "publishedAt": { "type": "string" },
+          "url": { "type": "string" },
+          "type": { "type": "string", "enum": ["filing", "company", "regulator", "government", "industry", "competitor", "customer", "market", "news"] },
+          "primary": { "type": "boolean" }
         }
       }
     }

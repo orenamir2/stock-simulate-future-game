@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { researchFramework, researchFrameworkPrompt } from "../../../lib/research-framework";
 
 type Scenario = {
   name: string;
@@ -6,6 +7,27 @@ type Scenario = {
   price: number;
   thesis: string;
   type: "bull" | "base" | "bear";
+  targetEquityValue: number;
+  targetDilutedShares: number;
+  valuationMethod: string;
+  keyDrivers: string[];
+  sourceIds: string[];
+};
+
+type ResearchFinding = {
+  categoryId: string;
+  score: number;
+  evidenceStrength: number;
+  finding: string;
+  unansweredQuestions: string[];
+  sourceIds: string[];
+};
+
+type Source = {
+  id: string;
+  url: string;
+  type: string;
+  primary: boolean;
 };
 
 type Analysis = {
@@ -13,11 +35,11 @@ type Analysis = {
   company: string;
   currentPrice: number;
   expectedPrice: number;
-  confidence: number;
   summary: string;
   scenarios: Scenario[];
   signals: unknown[];
-  sources: { url: string }[];
+  research: ResearchFinding[];
+  sources: Source[];
 };
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -104,7 +126,7 @@ function auditAnalysis(data: Analysis, requestedTicker: string): string | null {
   if (!Array.isArray(data.signals) || data.signals.length !== 4) {
     return "Signal count audit failed";
   }
-  if (!Array.isArray(data.sources) || data.sources.length < 3) {
+  if (!Array.isArray(data.sources) || data.sources.length < 8) {
     return "Source count audit failed";
   }
   if (data.sources.some(({ url }) => !/^https?:\/\//i.test(url))) {
@@ -119,7 +141,40 @@ function auditAnalysis(data: Analysis, requestedTicker: string): string | null {
   if (total !== 100 || Math.abs(expected - data.expectedPrice) > 0.1) {
     return "Probability audit failed";
   }
+  const categoryIds = new Set(researchFramework.map(({ id }) => id));
+  const returnedCategories = new Set(data.research?.map(({ categoryId }) => categoryId));
+  if (
+    !Array.isArray(data.research) ||
+    data.research.length !== researchFramework.length ||
+    returnedCategories.size !== categoryIds.size ||
+    [...categoryIds].some((id) => !returnedCategories.has(id))
+  ) {
+    return "Research coverage audit failed";
+  }
+  const sourceIds = new Set(data.sources.map(({ id }) => id));
+  const badReference = [...data.research, ...data.scenarios].some(
+    (item) => !item.sourceIds.length || item.sourceIds.some((id) => !sourceIds.has(id)),
+  );
+  if (sourceIds.size !== data.sources.length || badReference) {
+    return "Source reference audit failed";
+  }
+  const badValuation = data.scenarios.some(({ price, targetEquityValue, targetDilutedShares }) => {
+    const calculatedPrice = targetEquityValue / targetDilutedShares;
+    return Math.abs(calculatedPrice - price) > Math.max(0.5, price * 0.005);
+  });
+  if (badValuation) return "Scenario valuation audit failed";
   return null;
+}
+
+function calculateConfidence(data: Analysis): number {
+  const averageStrength =
+    data.research.reduce((sum, item) => sum + item.evidenceStrength, 0) /
+    (data.research.length * 3);
+  const primaryShare = data.sources.filter(({ primary }) => primary).length / data.sources.length;
+  const sourceDiversity = Math.min(new Set(data.sources.map(({ type }) => type)).size / 6, 1);
+  const unanswered = data.research.reduce((sum, item) => sum + item.unansweredQuestions.length, 0);
+  const completeness = Math.max(0, 1 - unanswered / (data.research.length * 4));
+  return Math.round(averageStrength * 50 + primaryShare * 20 + sourceDiversity * 15 + completeness * 15);
 }
 
 export async function POST(request: Request) {
@@ -142,11 +197,28 @@ export async function POST(request: Request) {
 
   researchInProgress = true;
   try {
-    const prompt = `Act as an evidence-led public-equity scenario analyst. Research ${ticker} using current web sources and the built-in web-search capability. Do not run shell commands and do not modify files. Identify the company and fresh stock price. Read or locate the last 10 quarterly or annual earnings reports, prioritizing SEC filings and investor relations. Evaluate revenue, margins, cash flow, balance sheet, guidance accuracy, consumer or customer sentiment, employee signals when material, competitive position, industry cycle, macro sensitivity, regulation, litigation, management and capital allocation, valuation, and tail risks. Create exactly 20 mutually exclusive scenarios for the stock price three years from today. Probabilities must be integers and sum to exactly 100. For every scenario estimate a three-year price from explicit business and valuation logic. Compute expectedPrice exactly as sum(probability * price) / 100. Distinguish facts from estimates. Do not imply certainty or give personalized investment advice. Sources must be direct, working HTTP or HTTPS URLs and favor primary sources. Return only the JSON object required by the supplied schema.`;
+    const prompt = `Act as a skeptical, evidence-led public-equity scenario analyst. Research ${ticker} using current web sources and built-in web search. Do not run shell commands or modify files.
+
+RESEARCH RULES
+- Identify the exact security, reporting currency, fresh price and price timestamp.
+- Locate the latest filing and earnings release plus enough prior filings to evaluate at least 10 quarters. Prefer filings, regulators, government data, company materials and competitor filings over summaries.
+- Triangulate management claims with independent customer, competitor, industry or government evidence. Never invent a metric; record important missing data in unansweredQuestions.
+- Complete every category below exactly once. score means evidence direction (-2 strongly negative, -1 negative, 0 mixed/neutral, 1 positive, 2 strongly positive). evidenceStrength means 0 no usable evidence, 1 weak/single source, 2 adequate/partly triangulated, 3 strong/primary and triangulated.
+- Each finding and scenario must cite valid IDs from the source ledger. Use direct working HTTP(S) URLs, exact publication dates when available, and honestly mark whether each source is primary.
+
+${researchFrameworkPrompt}
+
+SCENARIO AND VALUATION RULES
+- Create exactly 20 collectively exhaustive, mutually exclusive three-year scenarios. Avoid double-counting correlated events: combine them in a scenario where appropriate.
+- Start from base rates and the evidence scorecard; do not treat possibility as probability. Probabilities are integers totaling exactly 100.
+- For every scenario state 2–5 measurable key drivers and a suitable valuation method. Estimate target equity value and target diluted shares in the SAME unit (for example USD billions and billions of shares), then set price = targetEquityValue / targetDilutedShares. The server audits this identity.
+- Include dilution/buybacks, net cash/debt and cyclicality in target equity value. Use sector-appropriate methods (DCF, earnings/FCF multiple, book value, NAV or sum-of-parts), with different assumptions across bear/base/bull cases.
+- Compute expectedPrice exactly as sum(probability * price) / 100. Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice.
+- Return only the JSON object required by the supplied schema. Confidence is calculated by the server from evidence strength, unanswered questions, primary-source share and source diversity; do not return confidence.`;
     const data = JSON.parse(await runCodex(prompt)) as Analysis;
     const auditError = auditAnalysis(data, ticker);
     if (auditError) return Response.json({ error: auditError }, { status: 422 });
-    return Response.json({ ...data, live: true, engine: "codex-cli" });
+    return Response.json({ ...data, confidence: calculateConfidence(data), live: true, engine: "codex-cli" });
   } catch (error) {
     console.error("Codex research failed", error);
     return Response.json(

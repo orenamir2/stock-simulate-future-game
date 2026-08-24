@@ -2,6 +2,10 @@
 
 Possible researches a public company and converts the evidence into exactly 20 mutually exclusive, probability-weighted three-year stock-price scenarios. The UI exposes the expected-value math, scenario distribution, research signals, methodology, and source ledger.
 
+Each run answers a fixed 48-question research framework covering the business model, products and customers, market structure, competition and moat, financial quality, balance sheet, management and governance, capital allocation, valuation, risks and regulation, macro/geopolitics, and catalysts/expectations. The result records evidence direction, evidence strength, unanswered questions, and source IDs for every category.
+
+Scenario prices are also audited: each scenario must provide target equity value and target diluted shares in matching units, and `price = target equity value / target diluted shares`. Model confidence is calculated by the server from evidence strength, unanswered-question coverage, primary-source share, and source-type diversity; the research model cannot choose its own confidence score.
+
 ## Run locally with ChatGPT Plus
 
 Install and authenticate Codex CLI, then start the app:
