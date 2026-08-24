@@ -39,18 +39,78 @@ const CURRENCY = /^[A-Z]{3}$/;
 const EPSILON = 1e-9;
 
 export class AnalysisValidationError extends Error {
-  constructor(message: string) {
+  readonly details: Record<string, unknown>;
+
+  constructor(message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = "AnalysisValidationError";
+    this.details = details;
   }
 }
 
-function fail(message: string): never {
-  throw new AnalysisValidationError(message);
+function fail(message: string, details?: Record<string, unknown>): never {
+  throw new AnalysisValidationError(message, details);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export type SourceAccessTimestampDiagnostics = {
+  serverAccessedAt: string;
+  sourceCount: number;
+  stampedSourceCount: number;
+  invalidOriginalCount: number;
+  earliestOriginalAccessedAt: string | null;
+  latestOriginalAccessedAt: string | null;
+  futureOriginals: Array<{ id: string; accessedAt: string; aheadByMs: number }>;
+};
+
+export function stampSourceAccessTimes(
+  value: unknown,
+  accessedAt = new Date(),
+): { value: unknown; diagnostics: SourceAccessTimestampDiagnostics } {
+  const serverAccessedAt = accessedAt.toISOString();
+  const diagnostics: SourceAccessTimestampDiagnostics = {
+    serverAccessedAt,
+    sourceCount: 0,
+    stampedSourceCount: 0,
+    invalidOriginalCount: 0,
+    earliestOriginalAccessedAt: null,
+    latestOriginalAccessedAt: null,
+    futureOriginals: [],
+  };
+  if (!isRecord(value) || !Array.isArray(value.sources)) return { value, diagnostics };
+
+  diagnostics.sourceCount = value.sources.length;
+  const validOriginals: Array<{ timestamp: string; timestampMs: number }> = [];
+  const sources = value.sources.map((source, index) => {
+    if (!isRecord(source)) return source;
+    diagnostics.stampedSourceCount += 1;
+    if (typeof source.accessedAt === "string") {
+      const originalMs = Date.parse(source.accessedAt);
+      if (Number.isFinite(originalMs)) {
+        validOriginals.push({ timestamp: source.accessedAt, timestampMs: originalMs });
+        if (originalMs > accessedAt.getTime()) {
+          diagnostics.futureOriginals.push({
+            id: typeof source.id === "string" ? source.id : `sources[${index}]`,
+            accessedAt: source.accessedAt,
+            aheadByMs: originalMs - accessedAt.getTime(),
+          });
+        }
+      } else {
+        diagnostics.invalidOriginalCount += 1;
+      }
+    } else {
+      diagnostics.invalidOriginalCount += 1;
+    }
+    return { ...source, accessedAt: serverAccessedAt };
+  });
+
+  validOriginals.sort((a, b) => a.timestampMs - b.timestampMs);
+  diagnostics.earliestOriginalAccessedAt = validOriginals[0]?.timestamp ?? null;
+  diagnostics.latestOriginalAccessedAt = validOriginals.at(-1)?.timestamp ?? null;
+  return { value: { ...value, sources }, diagnostics };
 }
 
 function assertKeys(value: Record<string, unknown>, allowed: readonly string[], label: string) {
@@ -595,11 +655,26 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   }));
   const sourceMap = new Map(sources.map((source) => [source.id, source]));
   for (const source of sources) {
-    if (new Date(source.accessedAt).getTime() > nowMs + 5 * 60_000) {
-      fail(`${source.id} has a future access timestamp`);
+    const accessedAtMs = new Date(source.accessedAt).getTime();
+    if (accessedAtMs > nowMs + 5 * 60_000) {
+      fail(`${source.id} has a future access timestamp`, {
+        check: "source-accessed-at",
+        sourceId: source.id,
+        sourceUrl: source.url,
+        sourceAccessedAt: source.accessedAt,
+        serverNow: now.toISOString(),
+        allowedClockSkewMs: 5 * 60_000,
+        aheadByMs: accessedAtMs - nowMs,
+      });
     }
-    if (new Date(source.publishedAt).getTime() > new Date(source.accessedAt).getTime() + 24 * 60 * 60_000) {
-      fail(`${source.id} was accessed before it was published`);
+    if (new Date(source.publishedAt).getTime() > accessedAtMs + 24 * 60 * 60_000) {
+      fail(`${source.id} was accessed before it was published`, {
+        check: "source-published-before-access",
+        sourceId: source.id,
+        sourceUrl: source.url,
+        sourcePublishedAt: source.publishedAt,
+        sourceAccessedAt: source.accessedAt,
+      });
     }
   }
   if (sourceMap.get(raw.marketDataSourceId)?.type !== "market") {
