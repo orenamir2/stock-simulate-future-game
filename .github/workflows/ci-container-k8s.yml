@@ -9,7 +9,7 @@ on:
 
 concurrency:
   group: possible-production
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
@@ -96,7 +96,7 @@ jobs:
     name: Deploy to local Kubernetes
     if: github.event_name != 'pull_request'
     needs: publish
-    runs-on: [self-hosted, local-k8s]
+    runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: read
       packages: read

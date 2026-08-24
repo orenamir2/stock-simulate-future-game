@@ -25,7 +25,7 @@ Every pull request runs the production build and tests. Every push to `main` the
 4. Deploys the exact published digest to the `possible` namespace on local Kubernetes.
 5. Waits for the `/api/health` readiness check and rollout to succeed.
 
-The deployment job needs a self-hosted GitHub Actions runner because a GitHub-hosted runner cannot reach Kubernetes on your laptop. In the repository, open **Settings → Actions → Runners → New self-hosted runner**, register it on the machine that can run `kubectl`, and give it the custom label `local-k8s`. The runner must have `kubectl` installed and access to the intended kubeconfig.
+The deployment job needs a self-hosted GitHub Actions runner because a GitHub-hosted runner cannot reach Kubernetes on your laptop. In the repository, open **Settings → Actions → Runners → New self-hosted runner** and register the macOS ARM64 machine that can run `kubectl`. The workflow targets GitHub's standard `self-hosted`, `macOS`, and `ARM64` labels. The runner must have `kubectl` installed and access to the intended kubeconfig.
 
 Configure these GitHub repository settings:
 
