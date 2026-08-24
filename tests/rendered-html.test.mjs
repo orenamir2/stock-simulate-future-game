@@ -41,10 +41,11 @@ test("keeps the probability and live-research guardrails", async () => {
 });
 
 test("ships container and Kubernetes delivery guardrails", async () => {
-  const [dockerfile, workflow, deployment, health] = await Promise.all([
+  const [dockerfile, workflow, deployment, service, health] = await Promise.all([
     readFile(new URL("../Dockerfile", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/ci-container-k8s.yml", import.meta.url), "utf8"),
     readFile(new URL("../k8s/deployment.yaml", import.meta.url), "utf8"),
+    readFile(new URL("../k8s/service.yaml", import.meta.url), "utf8"),
     readFile(new URL("../app/api/health/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(dockerfile, /USER 1000:1000/);
@@ -56,5 +57,7 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /readOnlyRootFilesystem: true/);
   assert.match(deployment, /runAsUser: 1000/);
   assert.match(deployment, /path: \/api\/health/);
+  assert.match(service, /type: LoadBalancer/);
+  assert.match(service, /port: 8080/);
   assert.match(health, /status: "ok"/);
 });

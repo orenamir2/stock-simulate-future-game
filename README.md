@@ -34,7 +34,7 @@ Configure these GitHub repository settings:
 - Secret: `OPENAI_API_KEY` to enable live research; omit it for illustrative mode.
 - Secret: `GHCR_PAT` with `read:packages` is recommended for durable image pulls. If omitted, the workflow uses its short-lived `GITHUB_TOKEN` and refreshes the pull secret on every deployment.
 
-The app is exposed through a NodePort service at `http://localhost:30080` on Docker Desktop Kubernetes. Change `k8s/service.yaml` if that port is already in use.
+The app is exposed through Docker Desktop's local load balancer at `http://localhost:8080`. Change `k8s/service.yaml` if that port is already in use.
 
 To run the container without Kubernetes:
 

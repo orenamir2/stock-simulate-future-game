@@ -144,4 +144,4 @@ jobs:
       - name: Show deployed endpoint
         run: |
           kubectl -n possible get deployment,pods,service
-          echo "Possible is available on the local Kubernetes node at port 30080."
+          echo "Possible is available through the local LoadBalancer at http://localhost:8080."
