@@ -247,6 +247,8 @@ export default function Home() {
     } catch (caught) {
       const message = controller.signal.aborted
         ? "Research cancelled. The previous analysis remains unchanged."
+        : caught instanceof TypeError && caught.message === "Failed to fetch"
+          ? "The research connection closed unexpectedly. Please retry; the previous analysis remains unchanged."
         : caught instanceof Error
           ? caught.message
           : "Research failed. The previous analysis remains unchanged.";

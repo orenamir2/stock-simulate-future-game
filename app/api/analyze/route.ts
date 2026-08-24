@@ -11,6 +11,7 @@ import { researchFrameworkPrompt } from "../../../lib/research-framework";
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_CODEX_TIMEOUT_MS = 3_600_000;
 const CODEX_PROGRESS_INTERVAL_MS = 60_000;
+const RESPONSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
 let researchInProgress = false;
 
@@ -248,53 +249,86 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
   });
 }
 
-export async function POST(request: Request) {
-  const requestId = randomUUID();
-  const requestStartedAt = new Date();
-  let phase = "parse-request";
-  let ticker: string | undefined;
-  try {
-    ({ ticker } = (await request.json()) as { ticker?: string });
-  } catch (error) {
-    console.warn("Analysis request rejected", {
-      requestId,
-      phase,
-      reason: "invalid-json",
-      errorMessage: error instanceof Error ? error.message : String(error),
-    });
-    return Response.json({ error: "Invalid JSON request" }, { status: 400 });
-  }
-  ticker = ticker?.trim().toUpperCase();
-  if (!ticker || !/^[A-Z.-]{1,8}$/.test(ticker)) {
-    console.warn("Analysis request rejected", {
-      requestId,
-      phase,
-      reason: "invalid-ticker",
-      ticker: ticker ?? null,
-    });
-    return Response.json({ error: "Invalid ticker" }, { status: 400 });
-  }
-  if (researchInProgress) {
-    console.warn("Analysis request rejected", {
-      requestId,
-      phase: "admission",
-      reason: "research-already-in-progress",
-      ticker,
-    });
-    return Response.json(
-      { error: "Another research run is already in progress" },
-      { status: 429, headers: { "Retry-After": "30" } },
-    );
-  }
+function streamAnalysisResponse(
+  request: Request,
+  requestId: string,
+  requestStartedAt: Date,
+  ticker: string,
+): Response {
+  const encoder = new TextEncoder();
+  const researchController = new AbortController();
+  let finished = false;
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
-  researchInProgress = true;
-  console.info("Analysis request accepted", {
-    requestId,
-    ticker,
-    requestStartedAt: requestStartedAt.toISOString(),
+  const abortResearch = () => researchController.abort();
+  request.signal.addEventListener("abort", abortResearch, { once: true });
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enqueue = (value: string) => {
+        if (finished) return;
+        try {
+          controller.enqueue(encoder.encode(value));
+        } catch {
+          abortResearch();
+        }
+      };
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        if (keepaliveTimer) clearInterval(keepaliveTimer);
+        request.signal.removeEventListener("abort", abortResearch);
+        try {
+          controller.close();
+        } catch {
+          // The client already closed the response stream.
+        }
+      };
+
+      // JSON permits leading whitespace. Sending it immediately and periodically keeps
+      // long-running research requests active through local load balancers and proxies.
+      enqueue("\n");
+      keepaliveTimer = setInterval(() => enqueue("\n"), RESPONSE_KEEPALIVE_INTERVAL_MS);
+      keepaliveTimer.unref?.();
+
+      void completeAnalysis(requestId, requestStartedAt, ticker, researchController.signal)
+        .then(async (response) => enqueue(await response.text()))
+        .catch((error) => {
+          console.error("Analysis response stream failed", {
+            requestId,
+            ticker,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
+          enqueue(JSON.stringify({ error: "Research response failed unexpectedly. Please retry." }));
+        })
+        .finally(finish);
+    },
+    cancel() {
+      finished = true;
+      if (keepaliveTimer) clearInterval(keepaliveTimer);
+      request.signal.removeEventListener("abort", abortResearch);
+      abortResearch();
+    },
   });
+
+  return new Response(stream, {
+    headers: {
+      "Cache-Control": "no-cache, no-store, no-transform",
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
+async function completeAnalysis(
+  requestId: string,
+  requestStartedAt: Date,
+  ticker: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  let phase = "codex-research";
   try {
-    phase = "codex-research";
     const prompt = `Act as a skeptical, evidence-led public-equity scenario analyst. Research ${ticker} using current web sources and built-in web search. Do not run shell commands or modify files. The server—not you—calculates probabilities, valuation outputs, confidence and returns.
 
 REQUEST CONTEXT
@@ -318,7 +352,7 @@ SCENARIO AND VALUATION RULES
 - For each scenario provide explicit valuationInputs. forecast revenue is server-derived from baseline revenue and three years of revenueCagrPct. For enterprise-value-multiple use revenue, EBIT or free cash flow; server calculates EV = metric × multiple and equity = EV + net cash. For equity-value-multiple use net income or book value; server calculates equity = metric × multiple. For NAV use NAV or book value. The server then converts reporting currency to trading currency and divides by diluted shares.
 - Model dilution/buybacks in dilutedShares, balance-sheet change in netCash or balanceSheetValue, FX in reportingToTradingFxRate, and dividends in cumulativeDividendsPerShare. Use sector-appropriate metrics and materially different assumptions across cases.
 - Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice. Return only the JSON object required by the supplied schema.`;
-    const output = await runCodex(prompt, ticker, requestId, request.signal);
+    const output = await runCodex(prompt, ticker, requestId, signal);
     phase = "parse-codex-output";
     const raw = JSON.parse(output) as unknown;
     const validationNow = new Date();
@@ -406,4 +440,51 @@ SCENARIO AND VALUATION RULES
       elapsedMs: Date.now() - requestStartedAt.getTime(),
     });
   }
+}
+
+export async function POST(request: Request) {
+  const requestId = randomUUID();
+  const requestStartedAt = new Date();
+  let ticker: string | undefined;
+  try {
+    ({ ticker } = (await request.json()) as { ticker?: string });
+  } catch (error) {
+    console.warn("Analysis request rejected", {
+      requestId,
+      phase: "parse-request",
+      reason: "invalid-json",
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    return Response.json({ error: "Invalid JSON request" }, { status: 400 });
+  }
+  ticker = ticker?.trim().toUpperCase();
+  if (!ticker || !/^[A-Z.-]{1,8}$/.test(ticker)) {
+    console.warn("Analysis request rejected", {
+      requestId,
+      phase: "parse-request",
+      reason: "invalid-ticker",
+      ticker: ticker ?? null,
+    });
+    return Response.json({ error: "Invalid ticker" }, { status: 400 });
+  }
+  if (researchInProgress) {
+    console.warn("Analysis request rejected", {
+      requestId,
+      phase: "admission",
+      reason: "research-already-in-progress",
+      ticker,
+    });
+    return Response.json(
+      { error: "Another research run is already in progress" },
+      { status: 429, headers: { "Retry-After": "30" } },
+    );
+  }
+
+  researchInProgress = true;
+  console.info("Analysis request accepted", {
+    requestId,
+    ticker,
+    requestStartedAt: requestStartedAt.toISOString(),
+  });
+  return streamAnalysisResponse(request, requestId, requestStartedAt, ticker);
 }
