@@ -54,6 +54,7 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   ]);
   assert.match(dockerfile, /USER 1000:1000/);
   assert.match(dockerfile, /@openai\/codex/);
+  assert.match(dockerfile, /ca-certificates/);
   assert.match(workflow, /ghcr\.io/);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /codex-auth-bootstrap/);

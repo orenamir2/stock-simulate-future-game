@@ -11,7 +11,10 @@ FROM node:22.14.0-bookworm-slim AS runtime
 
 ARG CODEX_VERSION=0.144.4
 
-RUN npm install --global "@openai/codex@${CODEX_VERSION}" \
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force \
     && codex --version
 
