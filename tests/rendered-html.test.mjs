@@ -47,12 +47,13 @@ test("ships container and Kubernetes delivery guardrails", async () => {
     readFile(new URL("../k8s/deployment.yaml", import.meta.url), "utf8"),
     readFile(new URL("../app/api/health/route.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(dockerfile, /USER node/);
+  assert.match(dockerfile, /USER 1000:1000/);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /runs-on: \[self-hosted, macOS, ARM64\]/);
   assert.match(workflow, /set image deployment\/possible/);
   assert.match(workflow, /rollout status deployment\/possible/);
   assert.match(deployment, /readOnlyRootFilesystem: true/);
+  assert.match(deployment, /runAsUser: 1000/);
   assert.match(deployment, /path: \/api\/health/);
   assert.match(health, /status: "ok"/);
 });
