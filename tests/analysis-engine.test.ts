@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { AnalysisValidationError, processAnalysis } from "../lib/analysis-engine.ts";
+import {
+  AnalysisValidationError,
+  processAnalysis,
+  stampSourceAccessTimes,
+} from "../lib/analysis-engine.ts";
 import { makeRawAnalysis } from "./analysis-fixture.ts";
 
 const fixtureNow = new Date("2025-01-01T00:00:00Z");
@@ -77,6 +81,32 @@ test("still rejects duplicate source IDs and ticker mismatches", () => {
   duplicate.sources[1].id = duplicate.sources[0].id;
   assert.throws(() => processFixture(duplicate), /Source IDs must be unique/);
   assert.throws(() => processAnalysis(makeRawAnalysis(), "OTHER", fixtureNow), /Ticker mismatch/);
+});
+
+test("stamps model-supplied source access times with the authoritative server time", () => {
+  const raw = makeRawAnalysis();
+  raw.sources[1].accessedAt = "2025-01-01T02:00:00Z";
+  const stamped = stampSourceAccessTimes(raw, fixtureNow);
+  const result = processAnalysis(stamped.value, "TEST", fixtureNow);
+
+  assert.ok(result.sources.every(({ accessedAt }) => accessedAt === fixtureNow.toISOString()));
+  assert.deepEqual(stamped.diagnostics.futureOriginals, [{
+    id: "s2",
+    accessedAt: "2025-01-01T02:00:00Z",
+    aheadByMs: 2 * 60 * 60_000,
+  }]);
+  assert.equal(stamped.diagnostics.stampedSourceCount, raw.sources.length);
+});
+
+test("keeps rejecting future source access times that bypass server stamping", () => {
+  const raw = makeRawAnalysis();
+  raw.sources[1].accessedAt = "2025-01-01T02:00:00Z";
+  assert.throws(
+    () => processFixture(raw),
+    (error) => error instanceof AnalysisValidationError &&
+      error.details.sourceId === "s2" &&
+      error.details.aheadByMs === 2 * 60 * 60_000,
+  );
 });
 
 test("rejects homepage and private-network source URLs", () => {
