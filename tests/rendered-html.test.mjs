@@ -50,7 +50,10 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /CodexTimeoutError/);
   assert.match(route, /status: 504/);
   assert.match(route, /researchInProgress/);
+  assert.match(route, /RESPONSE_KEEPALIVE_INTERVAL_MS/);
+  assert.match(route, /X-Accel-Buffering/);
   assert.match(route, /request\.signal/);
+  assert.match(page, /research connection closed unexpectedly/);
   assert.doesNotMatch(route, /env: process\.env/);
   assert.match(engine, /Research coverage audit failed/);
   assert.match(engine, /calculateConfidence/);
