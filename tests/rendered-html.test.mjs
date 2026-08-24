@@ -58,6 +58,8 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(workflow, /ghcr\.io/);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /codex-auth-bootstrap/);
+  assert.match(workflow, /--field-selector=status\.phase=Running/);
+  assert.match(workflow, /wait --for=condition=Ready/);
   assert.match(workflow, /runs-on: \[self-hosted, macOS, ARM64\]/);
   assert.match(workflow, /group: possible-production-\$\{\{ github\.ref \}\}/);
   assert.match(workflow, /set image deployment\/possible/);

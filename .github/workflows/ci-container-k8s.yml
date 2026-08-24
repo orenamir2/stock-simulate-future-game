@@ -152,9 +152,20 @@ jobs:
       - name: Verify Codex authentication and application health
         shell: bash
         run: |
-          pod="$(kubectl -n possible get pod -l app.kubernetes.io/name=possible -o jsonpath='{.items[0].metadata.name}')"
-          kubectl -n possible exec "$pod" -- codex login status
-          curl --fail --silent --show-error http://localhost:8080/api/health
+          pod="$(kubectl -n possible get pod \
+            -l app.kubernetes.io/name=possible \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[0].metadata.name}')"
+          kubectl -n possible wait --for=condition=Ready "pod/$pod" --timeout=2m
+          kubectl -n possible exec -c possible "$pod" -- codex login status
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://localhost:8080/api/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Application health endpoint did not stabilize" >&2
+          exit 1
       - name: Show deployed endpoint
         run: |
           kubectl -n possible get deployment,pods,service
