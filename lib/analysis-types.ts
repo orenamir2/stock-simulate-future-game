@@ -139,6 +139,7 @@ export type RawAnalysis = {
 
 export type Analysis = Omit<RawAnalysis, "scenarios" | "research" | "sources"> & {
   expectedPrice: number;
+  terminalPriceStandardDeviation: number;
   expectedTotalReturnPct: number;
   expectedAnnualizedReturnPct: number;
   confidence: number;

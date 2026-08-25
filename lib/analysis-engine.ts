@@ -751,6 +751,12 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   }));
   const scenarios = addPriceBuckets(derived);
   const expectedPrice = scenarios.reduce((sum, scenario) => sum + scenario.probability * scenario.price, 0) / 100;
+  const terminalPriceStandardDeviation = Math.sqrt(
+    scenarios.reduce(
+      (sum, scenario) => sum + scenario.probability * Math.pow(scenario.price - expectedPrice, 2),
+      0,
+    ) / 100,
+  );
   const expectedTotalReturnPct =
     scenarios.reduce((sum, scenario) => sum + scenario.probability * scenario.totalReturnPct, 0) / 100;
   const expectedAnnualizedReturnPct =
@@ -762,6 +768,7 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     research,
     scenarios,
     expectedPrice,
+    terminalPriceStandardDeviation,
     expectedTotalReturnPct,
     expectedAnnualizedReturnPct,
     confidence,
