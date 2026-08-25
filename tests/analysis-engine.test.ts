@@ -52,17 +52,50 @@ test("rejects model-supplied calculated fields", () => {
   );
 });
 
-test("rejects duplicate scenario factor vectors", () => {
+test("merges duplicate scenario factor vectors and transfers their likelihood", () => {
   const raw = makeRawAnalysis();
+  const combinedLikelihood = raw.scenarios[0].relativeLikelihood + raw.scenarios[1].relativeLikelihood;
   raw.scenarios[1].factorStates = structuredClone(raw.scenarios[0].factorStates);
-  assert.throws(() => processFixture(raw), /factor-state combinations must be unique/);
+  const result = processFixture(raw);
+  assert.equal(result.scenarios.length, 19);
+  assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
+  assert.equal(result.scenarios.find(({ name }) => name === "Scenario 2")?.relativeLikelihood, combinedLikelihood);
+  assert.ok(result.confidence < processFixture().confidence);
+  assert.match(result.probabilityMethod, /1 invalid or overlapping scenario consolidated/);
 });
 
-test("rejects unsupported valuation formulas", () => {
+test("merges overlapping terminal prices instead of rejecting the analysis", () => {
+  const raw = makeRawAnalysis();
+  raw.scenarios[1].valuationInputs = structuredClone(raw.scenarios[0].valuationInputs);
+  const result = processFixture(raw);
+  assert.equal(result.scenarios.length, 19);
+  assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
+  const ascending = [...result.scenarios].sort((a, b) => a.price - b.price);
+  for (let index = 1; index < ascending.length; index += 1) {
+    assert.ok(ascending[index].price - ascending[index - 1].price >= 0.01);
+  }
+  assert.ok(result.confidence < processFixture().confidence);
+});
+
+test("drops malformed and scenario-level invalid entries while retaining an analysis", () => {
+  const raw = makeRawAnalysis();
+  (raw.scenarios[0] as unknown as Record<string, unknown>).relativeLikelihood = -1;
+  raw.scenarios[1].valuationInputs.valuationBasis = "enterprise-value-multiple";
+  raw.scenarios[1].valuationInputs.valuationMetric = "net-income";
+  raw.scenarios[2].sourceIds = ["unknown"];
+  const result = processFixture(raw);
+  assert.equal(result.scenarios.length, 17);
+  assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
+  assert.match(result.probabilityMethod, /3 invalid or overlapping scenarios consolidated/);
+});
+
+test("drops unsupported valuation formulas", () => {
   const raw = makeRawAnalysis();
   raw.scenarios[0].valuationInputs.valuationBasis = "enterprise-value-multiple";
   raw.scenarios[0].valuationInputs.valuationMetric = "net-income";
-  assert.throws(() => processFixture(raw), /incompatible enterprise-value metric/);
+  const result = processFixture(raw);
+  assert.equal(result.scenarios.length, 19);
+  assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
 });
 
 test("requires evidence for every answered research question", () => {
