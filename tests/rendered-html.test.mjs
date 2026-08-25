@@ -108,6 +108,9 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /codex-auth-source/);
   assert.match(deployment, /path: \/api\/health/);
   assert.match(deployment, /claimName: possible-analysis-history/);
+  assert.match(deployment, /name: prepare-analysis-history/);
+  assert.match(deployment, /chown 1000:1000 \/var\/lib\/possible\/analysis-history/);
+  assert.match(deployment, /add:\s+- CHOWN/);
   assert.match(historyStorage, /kind: PersistentVolume/);
   assert.match(historyStorage, /kind: PersistentVolumeClaim/);
   assert.match(historyStorage, /persistentVolumeReclaimPolicy: Retain/);

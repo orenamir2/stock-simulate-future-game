@@ -88,6 +88,26 @@ spec:
             - name: analysis-history
               mountPath: /var/lib/possible/analysis-history
       initContainers:
+        - name: prepare-analysis-history
+          image: ghcr.io/orenamir2/stock-simulate-future-game:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - chown 1000:1000 /var/lib/possible/analysis-history
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - CHOWN
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: analysis-history
+              mountPath: /var/lib/possible/analysis-history
         - name: prepare-codex-auth
           image: ghcr.io/orenamir2/stock-simulate-future-game:latest
           imagePullPolicy: Always
