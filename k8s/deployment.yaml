@@ -49,6 +49,8 @@ spec:
               value: "3600000"
             - name: CODEX_REASONING_EFFORT
               value: low
+            - name: ANALYSIS_HISTORY_DIR
+              value: /var/lib/possible/analysis-history
           readinessProbe:
             httpGet:
               path: /api/health
@@ -83,6 +85,8 @@ spec:
               mountPath: /tmp
             - name: codex-home
               mountPath: /var/lib/codex
+            - name: analysis-history
+              mountPath: /var/lib/possible/analysis-history
       initContainers:
         - name: prepare-codex-auth
           image: ghcr.io/orenamir2/stock-simulate-future-game:latest
@@ -112,3 +116,6 @@ spec:
           secret:
             secretName: codex-auth-bootstrap
             defaultMode: 0440
+        - name: analysis-history
+          persistentVolumeClaim:
+            claimName: possible-analysis-history

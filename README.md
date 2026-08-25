@@ -41,15 +41,19 @@ For private GHCR pulls, configure repository secret `GHCR_PAT` with `read:packag
 
 The app is exposed locally at `http://localhost:8080`.
 
+Completed live analyses are written as individual JSON snapshots and shown in the History tab. The Kubernetes deployment mounts the `possible-analysis-history` PVC at `/var/lib/possible/analysis-history`; its retained host-path PV stores the files on the Mac under `data/analysis-history`. If the repository is moved, update `spec.hostPath.path` in `k8s/history-storage.yaml` before applying the manifests. Local `npm run dev` uses that same project folder by default, or `ANALYSIS_HISTORY_DIR` when set.
+
 ## Manual container test
 
 Never copy `auth.json` into an image. Mount a disposable writable Codex home instead:
 
 ```bash
 docker build -t possible:local .
+mkdir -p data/analysis-history
 docker run --rm -p 3000:3000 \
   -e CODEX_HOME=/var/lib/codex \
   -v "$HOME/.codex:/var/lib/codex" \
+  -v "$PWD/data/analysis-history:/var/lib/possible/analysis-history" \
   possible:local
 ```
 

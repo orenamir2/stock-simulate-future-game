@@ -19,15 +19,18 @@ test("server-renders the scenario product", async () => {
   assert.match(html, /20 ways the next three years unfold/);
   assert.match(html, /Probability check/);
   assert.match(html, /Export PDF/);
+  assert.match(html, /History/);
   assert.match(html, /100/);
   assert.match(html, /Not investment advice/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, engine, framework, schema, layout, packageJson] = await Promise.all([
+  const [page, route, historyRoute, historyStore, engine, framework, schema, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/history/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/analysis-history.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
     readFile(new URL("../config/stock-analysis.schema.json", import.meta.url), "utf8"),
@@ -40,6 +43,9 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(page, /createAnalysisReportPdf/);
   assert.doesNotMatch(page, /setAnalysis\(makeSample\(ticker\)\)/);
   assert.match(route, /processAnalysis/);
+  assert.match(route, /saveAnalysisHistory/);
+  assert.match(historyRoute, /listAnalysisHistory/);
+  assert.match(historyStore, /ANALYSIS_HISTORY_DIR/);
   assert.match(engine, /normalizeProbabilities/);
   assert.match(engine, /deriveScenario/);
   assert.match(engine, /addPriceBuckets/);
@@ -74,16 +80,19 @@ test("keeps the probability and live-research guardrails", async () => {
 });
 
 test("ships container and Kubernetes delivery guardrails", async () => {
-  const [dockerfile, workflow, deployment, service, health] = await Promise.all([
+  const [dockerfile, workflow, deployment, historyStorage, kustomization, service, health] = await Promise.all([
     readFile(new URL("../Dockerfile", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/ci-container-k8s.yml", import.meta.url), "utf8"),
     readFile(new URL("../k8s/deployment.yaml", import.meta.url), "utf8"),
+    readFile(new URL("../k8s/history-storage.yaml", import.meta.url), "utf8"),
+    readFile(new URL("../k8s/kustomization.yaml", import.meta.url), "utf8"),
     readFile(new URL("../k8s/service.yaml", import.meta.url), "utf8"),
     readFile(new URL("../app/api/health/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(dockerfile, /USER 1000:1000/);
   assert.match(dockerfile, /@openai\/codex/);
   assert.match(dockerfile, /ca-certificates/);
+  assert.match(dockerfile, /ANALYSIS_HISTORY_DIR/);
   assert.match(workflow, /ghcr\.io/);
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /codex-auth-bootstrap/);
@@ -98,6 +107,12 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /ghcr-pull/);
   assert.match(deployment, /codex-auth-source/);
   assert.match(deployment, /path: \/api\/health/);
+  assert.match(deployment, /claimName: possible-analysis-history/);
+  assert.match(historyStorage, /kind: PersistentVolume/);
+  assert.match(historyStorage, /kind: PersistentVolumeClaim/);
+  assert.match(historyStorage, /persistentVolumeReclaimPolicy: Retain/);
+  assert.match(historyStorage, /data\/analysis-history/);
+  assert.match(kustomization, /history-storage\.yaml/);
   assert.match(service, /type: LoadBalancer/);
   assert.match(service, /port: 8080/);
   assert.match(health, /status: "ok"/);

@@ -16,12 +16,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force \
-    && codex --version
+    && codex --version \
+    && mkdir -p /var/lib/possible/analysis-history \
+    && chown -R 1000:1000 /var/lib/possible
 
 ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
     CODEX_HOME=/var/lib/codex \
+    ANALYSIS_HISTORY_DIR=/var/lib/possible/analysis-history \
     CODEX_REASONING_EFFORT=low \
     CODEX_TIMEOUT_MS=3600000 \
     STOCK_ANALYSIS_SCHEMA_PATH=/app/config/stock-analysis.schema.json \
