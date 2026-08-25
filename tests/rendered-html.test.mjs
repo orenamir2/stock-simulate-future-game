@@ -18,6 +18,7 @@ test("server-renders the scenario product", async () => {
   assert.match(html, /Price the possible/);
   assert.match(html, /20 ways the next three years unfold/);
   assert.match(html, /Probability check/);
+  assert.match(html, /Export PDF/);
   assert.match(html, /100/);
   assert.match(html, /Not investment advice/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);
@@ -35,6 +36,7 @@ test("keeps the probability and live-research guardrails", async () => {
   ]);
   assert.equal((page.match(/targetPrice/g) ?? []).length, 2);
   assert.match(page, /expectedTotalReturnPct/);
+  assert.match(page, /createAnalysisReportPdf/);
   assert.doesNotMatch(page, /setAnalysis\(makeSample\(ticker\)\)/);
   assert.match(route, /processAnalysis/);
   assert.match(engine, /normalizeProbabilities/);

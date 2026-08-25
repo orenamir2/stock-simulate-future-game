@@ -3,6 +3,7 @@
 import { FormEvent, useMemo, useRef, useState } from "react";
 import { processAnalysis } from "../lib/analysis-engine";
 import type { Analysis, FactorStates, RawAnalysis } from "../lib/analysis-types";
+import { analysisReportFilename, createAnalysisReportPdf } from "../lib/pdf-report";
 import { researchFramework } from "../lib/research-framework";
 
 const sampleScenarioInputs = [
@@ -217,6 +218,23 @@ export default function Home() {
     [analysis],
   );
 
+  function exportPdf() {
+    try {
+      const pdf = createAnalysisReportPdf(analysis);
+      const blob = new Blob([pdf], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = analysisReportFilename(analysis);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch {
+      setError("The PDF could not be generated. Please retry.");
+    }
+  }
+
   async function runAnalysis(event: FormEvent) {
     event.preventDefault();
     const ticker = query.trim().toUpperCase();
@@ -293,7 +311,10 @@ export default function Home() {
           <p>{analysis.ticker} · {analysis.exchange} · {analysis.shareClass} · {analysis.tradingCurrency} · {notice}</p>
           <small>Price as of {formatTimestamp(analysis.priceAsOf)} · Fiscal data through {analysis.fiscalDataAsOf} · {analysis.instrumentIdType.toUpperCase()} {analysis.instrumentId}</small>
         </div>
-        <div className="confidence"><span>EVIDENCE CONFIDENCE</span><strong>{analysis.confidence}<small>/100</small></strong><div className="confidenceBar"><i style={{ width: `${analysis.confidence}%` }} /></div></div>
+        <div className="analysisActions">
+          <button className="exportButton" type="button" onClick={exportPdf} aria-label={`Export ${analysis.ticker} analysis as PDF`}><span aria-hidden="true">↓</span> Export PDF</button>
+          <div className="confidence"><span>EVIDENCE CONFIDENCE</span><strong>{analysis.confidence}<small>/100</small></strong><div className="confidenceBar"><i style={{ width: `${analysis.confidence}%` }} /></div></div>
+        </div>
       </div>
 
       <div className="metricGrid">
