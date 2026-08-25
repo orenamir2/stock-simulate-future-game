@@ -10,7 +10,7 @@ import { makeRawAnalysis } from "./analysis-fixture.ts";
 const fixtureNow = new Date("2025-01-01T00:00:00Z");
 const processFixture = (raw = makeRawAnalysis()) => processAnalysis(raw, "TEST", fixtureNow);
 
-test("derives probabilities, prices, returns, confidence and exhaustive price buckets", () => {
+test("derives probabilities, prices, standard deviation, returns, confidence and exhaustive price buckets", () => {
   const result = processFixture();
   assert.equal(result.scenarios.length, 20);
   assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
@@ -22,6 +22,13 @@ test("derives probabilities, prices, returns, confidence and exhaustive price bu
     0,
   ) / 100;
   assert.ok(Math.abs(result.expectedPrice - expectedPrice) < 1e-9);
+  const terminalPriceVariance = result.scenarios.reduce(
+    (sum, scenario) => sum + scenario.probability * Math.pow(scenario.price - expectedPrice, 2),
+    0,
+  ) / 100;
+  assert.ok(
+    Math.abs(result.terminalPriceStandardDeviation - Math.sqrt(terminalPriceVariance)) < 1e-9,
+  );
   for (const scenario of result.scenarios) {
     assert.ok(Math.abs(scenario.price - scenario.targetEquityValue / scenario.targetDilutedShares) < 1e-9);
     assert.ok(Number.isFinite(scenario.totalReturnPct));

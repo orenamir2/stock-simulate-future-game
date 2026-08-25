@@ -320,6 +320,7 @@ export default function Home() {
       <div className="metricGrid">
         <article className="priceCard dark"><span>Price today</span><strong>{formatMoney(analysis.currentPrice, analysis.tradingCurrency)}</strong><small>Timestamped market reference</small></article>
         <article className="priceCard lime"><span>Expected terminal price</span><strong>{formatMoney(analysis.expectedPrice, analysis.tradingCurrency)}</strong><small>Server-derived probability-weighted mean</small></article>
+        <article className="priceCard"><span>Terminal price standard deviation</span><strong>{formatMoney(analysis.terminalPriceStandardDeviation, analysis.tradingCurrency)}</strong><small>Probability-weighted spread around the expected price</small></article>
         <article className="priceCard"><span>Expected 3-year total return</span><strong className={analysis.expectedTotalReturnPct >= 0 ? "positive" : "negative"}>{analysis.expectedTotalReturnPct >= 0 ? "+" : ""}{analysis.expectedTotalReturnPct.toFixed(1)}%</strong><small>{analysis.expectedAnnualizedReturnPct >= 0 ? "+" : ""}{analysis.expectedAnnualizedReturnPct.toFixed(1)}% probability-weighted annualized return</small></article>
         <article className="priceCard"><span>Probability check</span><strong>{probabilityTotal.toFixed(1)}%</strong><small className={Math.abs(probabilityTotal - 100) < 0.01 ? "checked" : "warning"}>{Math.abs(probabilityTotal - 100) < 0.01 ? "✓ Server normalized" : "Needs audit"}</small></article>
       </div>

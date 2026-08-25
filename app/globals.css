@@ -14,3 +14,8 @@
 
 @media(max-width:850px){.sectionIntro{align-items:flex-start}.analysisActions{align-items:flex-start;flex-direction:column-reverse;gap:18px}}
 @media(max-width:570px){.analysisActions{margin-top:25px}.analysisActions .confidence{margin-top:0}.exportButton{width:100%;justify-content:space-between}}
+
+/* Five headline metrics, including terminal-price dispersion. */
+.metricGrid{grid-template-columns:repeat(5,1fr)}
+@media(max-width:850px){.metricGrid{grid-template-columns:1fr 1fr}.priceCard{border-right:1px solid var(--ink);border-bottom:1px solid var(--ink)}.priceCard:nth-child(even){border-right:0}.priceCard:last-child{grid-column:1/-1;border-right:0;border-bottom:0}}
+@media(max-width:570px){.metricGrid{grid-template-columns:1fr}.priceCard{grid-column:auto;border-right:0}.priceCard:last-child{grid-column:auto;border-bottom:0}}

@@ -36,6 +36,7 @@ test("keeps the probability and live-research guardrails", async () => {
   ]);
   assert.equal((page.match(/targetPrice/g) ?? []).length, 2);
   assert.match(page, /expectedTotalReturnPct/);
+  assert.match(page, /terminalPriceStandardDeviation/);
   assert.match(page, /createAnalysisReportPdf/);
   assert.doesNotMatch(page, /setAnalysis\(makeSample\(ticker\)\)/);
   assert.match(route, /processAnalysis/);
