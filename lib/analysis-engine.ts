@@ -311,6 +311,22 @@ function parseScenario(value: unknown, index: number): RawScenario {
   };
 }
 
+function parseScenarios(values: unknown[]): RawScenario[] {
+  const scenarios: RawScenario[] = [];
+  const dropped: Array<{ index: number; reason: string }> = [];
+  values.forEach((value, index) => {
+    try {
+      scenarios.push(parseScenario(value, index));
+    } catch (error) {
+      if (!(error instanceof AnalysisValidationError)) throw error;
+      dropped.push({ index, reason: error.message });
+    }
+  });
+  if (scenarios.length === 0) fail("No usable scenarios remained after validation");
+  if (dropped.length > 0) console.warn("Dropped malformed analysis scenarios", { dropped });
+  return scenarios;
+}
+
 function parseBaseline(value: unknown): BaselineFinancials {
   if (!isRecord(value)) fail("baseline must be an object");
   assertKeys(value, [
@@ -390,7 +406,7 @@ function parseRawAnalysis(value: unknown): RawAnalysis {
     fxSourceId: nonEmptyString(value.fxSourceId, "fxSourceId", 40),
     summary: nonEmptyString(value.summary, "summary", 3_000),
     baseline: parseBaseline(value.baseline),
-    scenarios: value.scenarios.map(parseScenario),
+    scenarios: parseScenarios(value.scenarios),
     signals: value.signals.map((signal, index) => {
       if (!isRecord(signal)) fail(`signals[${index}] must be an object`);
       assertKeys(signal, ["label", "value", "tone", "detail"], `signals[${index}]`);
@@ -603,13 +619,85 @@ function normalizeProbabilities(scenarios: RawScenario[], confidence: number): n
   return tenths.map((value) => value / 10);
 }
 
-function addPriceBuckets(scenarios: Array<Omit<Scenario, "priceRangeMin" | "priceRangeMax">>): Scenario[] {
-  const ascending = [...scenarios].sort((a, b) => a.price - b.price || a.name.localeCompare(b.name));
-  for (let index = 1; index < ascending.length; index += 1) {
-    if (Math.abs(ascending[index].price - ascending[index - 1].price) < 0.01) {
-      fail("Scenario terminal prices must be distinct so outcome buckets do not overlap");
+function mergeScenarioPair(existing: RawScenario, incoming: RawScenario): RawScenario {
+  const representative = incoming.relativeLikelihood > existing.relativeLikelihood ? incoming : existing;
+  return {
+    ...representative,
+    relativeLikelihood: existing.relativeLikelihood + incoming.relativeLikelihood,
+    keyDrivers: [...new Set([...representative.keyDrivers, ...existing.keyDrivers, ...incoming.keyDrivers])].slice(0, 5),
+    sourceIds: [...new Set([...representative.sourceIds, ...existing.sourceIds, ...incoming.sourceIds])].slice(0, 8),
+  };
+}
+
+function mergeDuplicateScenarios(scenarios: RawScenario[]): { scenarios: RawScenario[]; mergedCount: number } {
+  const retained: RawScenario[] = [];
+  const merges: Array<{ retained: string; merged: string; reason: "name" | "factor-states" }> = [];
+  for (const scenario of scenarios) {
+    const vector = JSON.stringify(scenario.factorStates);
+    const duplicateIndex = retained.findIndex((candidate) =>
+      candidate.name.toLowerCase() === scenario.name.toLowerCase() ||
+      JSON.stringify(candidate.factorStates) === vector
+    );
+    if (duplicateIndex < 0) {
+      retained.push(scenario);
+      continue;
+    }
+    const duplicate = retained[duplicateIndex];
+    const reason = duplicate.name.toLowerCase() === scenario.name.toLowerCase() ? "name" : "factor-states";
+    const merged = mergeScenarioPair(duplicate, scenario);
+    retained[duplicateIndex] = merged;
+    merges.push({
+      retained: merged.name,
+      merged: merged.name === scenario.name ? duplicate.name : scenario.name,
+      reason,
+    });
+  }
+  if (merges.length > 0) console.warn("Merged duplicate analysis scenarios", { merges });
+  return { scenarios: retained, mergedCount: merges.length };
+}
+
+function recoverScenarioPrices(
+  scenarios: RawScenario[],
+  baseline: BaselineFinancials,
+  currentPrice: number,
+): { scenarios: RawScenario[]; droppedCount: number; mergedCount: number } {
+  const valid: Array<{ raw: RawScenario; price: number }> = [];
+  const dropped: Array<{ scenario: string; reason: string }> = [];
+  for (const scenario of scenarios) {
+    try {
+      valid.push({ raw: scenario, price: deriveScenario(scenario, baseline, currentPrice).price });
+    } catch (error) {
+      if (!(error instanceof AnalysisValidationError)) throw error;
+      dropped.push({ scenario: scenario.name, reason: error.message });
     }
   }
+  if (valid.length === 0) fail("No usable scenarios remained after valuation validation");
+  if (dropped.length > 0) console.warn("Dropped invalid analysis scenarios", { dropped });
+
+  valid.sort((a, b) => a.price - b.price || a.raw.name.localeCompare(b.raw.name));
+  const retained: Array<{ raw: RawScenario; price: number }> = [];
+  const merges: Array<{ retained: string; merged: string; terminalPrice: number }> = [];
+  for (const candidate of valid) {
+    const previous = retained.at(-1);
+    if (!previous || Math.abs(candidate.price - previous.price) >= 0.01) {
+      retained.push(candidate);
+      continue;
+    }
+    const raw = mergeScenarioPair(previous.raw, candidate.raw);
+    const price = deriveScenario(raw, baseline, currentPrice).price;
+    retained[retained.length - 1] = { raw, price };
+    merges.push({
+      retained: raw.name,
+      merged: raw.name === candidate.raw.name ? previous.raw.name : candidate.raw.name,
+      terminalPrice: price,
+    });
+  }
+  if (merges.length > 0) console.warn("Merged scenarios with overlapping terminal prices", { merges });
+  return { scenarios: retained.map(({ raw }) => raw), droppedCount: dropped.length, mergedCount: merges.length };
+}
+
+function addPriceBuckets(scenarios: Array<Omit<Scenario, "priceRangeMin" | "priceRangeMax">>): Scenario[] {
+  const ascending = [...scenarios].sort((a, b) => a.price - b.price || a.name.localeCompare(b.name));
   const withBuckets = ascending.map((scenario, index) => ({
     ...scenario,
     priceRangeMin: index === 0 ? 0 : (ascending[index - 1].price + scenario.price) / 2,
@@ -722,30 +810,44 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     };
   });
 
-  const confidence = calculateConfidence(research, sources);
-  const factorVectors = new Set<string>();
-  const names = new Set<string>();
-  raw.scenarios.forEach((scenario) => {
-    auditReferences(scenario.sourceIds, sourceIds, scenario.name);
-    if (!scenario.sourceIds.some((id) => sourceMap.get(id)?.primary)) {
-      fail(`${scenario.name} requires at least one primary source`);
-    }
-    const name = scenario.name.toLowerCase();
-    if (names.has(name)) fail("Scenario names must be unique");
-    names.add(name);
-    const vector = JSON.stringify(scenario.factorStates);
-    if (factorVectors.has(vector)) fail("Scenario factor-state combinations must be unique");
-    factorVectors.add(vector);
-    if (
-      raw.tradingCurrency === raw.reportingCurrency &&
-      Math.abs(scenario.valuationInputs.reportingToTradingFxRate - 1) > 0.001
-    ) {
-      fail(`${scenario.name} must use an FX rate of 1 when currencies match`);
+  const scenarioInputCount = 20;
+  const scenarioValidationDrops: Array<{ scenario: string; reason: string }> = [];
+  const referenceValidScenarios = raw.scenarios.filter((scenario) => {
+    try {
+      auditReferences(scenario.sourceIds, sourceIds, scenario.name);
+      if (!scenario.sourceIds.some((id) => sourceMap.get(id)?.primary)) {
+        fail(`${scenario.name} requires at least one primary source`);
+      }
+      if (
+        raw.tradingCurrency === raw.reportingCurrency &&
+        Math.abs(scenario.valuationInputs.reportingToTradingFxRate - 1) > 0.001
+      ) {
+        fail(`${scenario.name} must use an FX rate of 1 when currencies match`);
+      }
+      return true;
+    } catch (error) {
+      if (!(error instanceof AnalysisValidationError)) throw error;
+      scenarioValidationDrops.push({ scenario: scenario.name, reason: error.message });
+      return false;
     }
   });
+  if (referenceValidScenarios.length === 0) fail("No usable scenarios remained after evidence validation");
+  if (scenarioValidationDrops.length > 0) {
+    console.warn("Dropped scenarios that failed evidence validation", { dropped: scenarioValidationDrops });
+  }
 
-  const probabilities = normalizeProbabilities(raw.scenarios, confidence);
-  const derived = raw.scenarios.map((scenario, index) => ({
+  const deduplicated = mergeDuplicateScenarios(referenceValidScenarios);
+  const priceRecovered = recoverScenarioPrices(deduplicated.scenarios, raw.baseline, raw.currentPrice);
+  const recoveryCount =
+    scenarioInputCount - raw.scenarios.length +
+    scenarioValidationDrops.length +
+    deduplicated.mergedCount +
+    priceRecovered.droppedCount +
+    priceRecovered.mergedCount;
+  const evidenceConfidence = calculateConfidence(research, sources);
+  const confidence = Math.round(Math.max(0, evidenceConfidence - Math.min(15, recoveryCount * 1.5)));
+  const probabilities = normalizeProbabilities(priceRecovered.scenarios, confidence);
+  const derived = priceRecovered.scenarios.map((scenario, index) => ({
     ...deriveScenario(scenario, raw.baseline, raw.currentPrice),
     probability: probabilities[index],
   }));
@@ -772,6 +874,8 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     expectedTotalReturnPct,
     expectedAnnualizedReturnPct,
     confidence,
-    probabilityMethod: "Evidence-shrunk relative likelihoods; server-normalized to 100.0%",
+    probabilityMethod: recoveryCount > 0
+      ? `Evidence-shrunk relative likelihoods; ${recoveryCount} invalid or overlapping scenario${recoveryCount === 1 ? "" : "s"} consolidated; server-normalized to 100.0%`
+      : "Evidence-shrunk relative likelihoods; server-normalized to 100.0%",
   };
 }

@@ -410,7 +410,7 @@ export default function Home() {
         </div>
         <span id="tickerHint">Try AAPL, MSFT, NVDA or any listed company</span>
       </form>
-      <div className="heroMeta"><span><b>48</b> answered questions</span><i /><span><b>20</b> outcome buckets</span><i /><span><b>3</b>-year horizon</span><i /><span><b>100.0%</b> server-normalized</span></div>
+      <div className="heroMeta"><span><b>48</b> answered questions</span><i /><span><b>{analysis.scenarios.length}</b> outcome buckets</span><i /><span><b>3</b>-year horizon</span><i /><span><b>100.0%</b> server-normalized</span></div>
     </section>
 
     {error && <div className="errorBanner" role="alert"><strong>Analysis not replaced.</strong> {error}</div>}
@@ -469,7 +469,7 @@ export default function Home() {
         </article>;
       })}</div>
 
-      <div className="scenarioHeader"><div><span className="kicker">SCENARIO BOOK</span><h2>20 ways the next three years unfold</h2><p>Each row represents a non-overlapping terminal-price bucket; its center price is calculated from explicit inputs.</p></div><div className="filters" aria-label="Filter scenarios">{(["all", "bull", "base", "bear"] as const).map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item === "all" ? "All 20" : item}</button>)}</div></div>
+      <div className="scenarioHeader"><div><span className="kicker">SCENARIO BOOK</span><h2>{`${analysis.scenarios.length} ways the next three years unfold`}</h2><p>Each row represents a non-overlapping terminal-price bucket; its center price is calculated from explicit inputs.</p></div><div className="filters" aria-label="Filter scenarios">{(["all", "bull", "base", "bear"] as const).map((item) => <button key={item} className={filter === item ? "selected" : ""} onClick={() => setFilter(item)}>{item === "all" ? `All ${analysis.scenarios.length}` : item}</button>)}</div></div>
       <div className="scenarioTable" role="table" aria-label="Probability weighted scenarios">
         <div className="tableHead" role="row"><span>#</span><span>Scenario</span><span>Probability</span><span>3Y price</span><span>Total return</span><span /></div>
         {filtered.map((scenario) => {
