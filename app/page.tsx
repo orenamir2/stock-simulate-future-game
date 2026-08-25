@@ -183,6 +183,29 @@ const stages = [
   "Normalizing evidence-shrunk likelihoods",
 ];
 
+type HistorySummary = {
+  id: string;
+  createdAt: string;
+  ticker: string;
+  company: string;
+  tradingCurrency: string;
+  currentPrice: number;
+  expectedPrice: number;
+  expectedTotalReturnPct: number;
+  confidence: number;
+  priceAsOf: string;
+};
+
+type StoredHistory = {
+  id: string;
+  createdAt: string;
+  analysis: Analysis;
+};
+
+type AnalysisResponse = Analysis & {
+  historyWarning?: string;
+};
+
 function formatMoney(value: number, currency: string, maximumFractionDigits = 2) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -195,6 +218,13 @@ function formatTimestamp(value: string) {
   return new Date(value).toISOString().replace("T", " ").replace(".000Z", " UTC");
 }
 
+function formatHistoryDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
 export default function Home() {
   const [query, setQuery] = useState("AAPL");
   const [analysis, setAnalysis] = useState<Analysis>(() => makeSample());
@@ -205,6 +235,12 @@ export default function Home() {
   const [notice, setNotice] = useState("Illustrative dataset");
   const [error, setError] = useState<string | null>(null);
   const [openResearch, setOpenResearch] = useState<string | null>(null);
+  const [view, setView] = useState<"analysis" | "history">("analysis");
+  const [history, setHistory] = useState<HistorySummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyAction, setHistoryAction] = useState<string | null>(null);
+  const [historyWarning, setHistoryWarning] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const probabilityTotal = analysis.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0);
   const filtered = filter === "all" ? analysis.scenarios : analysis.scenarios.filter((scenario) => scenario.type === filter);
@@ -218,21 +254,88 @@ export default function Home() {
     [analysis],
   );
 
+  async function refreshHistory() {
+    setHistoryLoading(true);
+    try {
+      const response = await fetch("/api/history?limit=200", { cache: "no-store" });
+      const payload = await response.json() as { items?: HistorySummary[]; error?: string };
+      if (!response.ok || !Array.isArray(payload.items)) {
+        throw new Error(payload.error ?? "History is unavailable");
+      }
+      setHistory(payload.items);
+      setHistoryError(null);
+    } catch (caught) {
+      setHistoryError(caught instanceof Error ? caught.message : "History is unavailable");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function fetchHistoricalAnalysis(id: string) {
+    const response = await fetch(`/api/history?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+    const payload = await response.json() as StoredHistory | { error?: string };
+    if (!response.ok || !("analysis" in payload)) {
+      throw new Error("error" in payload && payload.error ? payload.error : "Historical analysis is unavailable");
+    }
+    return payload;
+  }
+
+  function downloadPdf(value: Analysis, createdAt?: string) {
+    const pdf = createAnalysisReportPdf(value);
+    const blob = new Blob([pdf], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const filename = analysisReportFilename(value);
+    link.download = createdAt ? `${createdAt.slice(0, 10)}-${filename}` : filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  }
+
   function exportPdf() {
     try {
-      const pdf = createAnalysisReportPdf(analysis);
-      const blob = new Blob([pdf], { type: "application/pdf" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = analysisReportFilename(analysis);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+      downloadPdf(analysis);
     } catch {
       setError("The PDF could not be generated. Please retry.");
     }
+  }
+
+  async function openHistoricalAnalysis(item: HistorySummary) {
+    setHistoryAction(`open:${item.id}`);
+    setHistoryError(null);
+    try {
+      const record = await fetchHistoricalAnalysis(item.id);
+      setAnalysis(record.analysis);
+      setNotice(`Historical snapshot · saved ${formatHistoryDate(record.createdAt)}`);
+      setExpanded(null);
+      setOpenResearch(null);
+      setView("analysis");
+      window.setTimeout(() => document.querySelector("#analysis")?.scrollIntoView(), 0);
+    } catch (caught) {
+      setHistoryError(caught instanceof Error ? caught.message : "Historical analysis is unavailable");
+    } finally {
+      setHistoryAction(null);
+    }
+  }
+
+  async function exportHistoricalAnalysis(item: HistorySummary) {
+    setHistoryAction(`export:${item.id}`);
+    setHistoryError(null);
+    try {
+      const record = await fetchHistoricalAnalysis(item.id);
+      downloadPdf(record.analysis, record.createdAt);
+    } catch (caught) {
+      setHistoryError(caught instanceof Error ? caught.message : "The historical PDF could not be generated");
+    } finally {
+      setHistoryAction(null);
+    }
+  }
+
+  function showAnalysisAnchor(id: string) {
+    setView("analysis");
+    window.setTimeout(() => document.querySelector(id)?.scrollIntoView(), 0);
   }
 
   async function runAnalysis(event: FormEvent) {
@@ -245,6 +348,7 @@ export default function Home() {
     setStage(0);
     setExpanded(null);
     setError(null);
+    setHistoryWarning(null);
     const timer = window.setInterval(
       () => setStage((value) => Math.min(value + 1, stages.length - 1)),
       8_000,
@@ -256,12 +360,14 @@ export default function Home() {
         body: JSON.stringify({ ticker }),
         signal: controller.signal,
       });
-      const payload = await response.json() as Analysis | { error?: string };
+      const payload = await response.json() as AnalysisResponse | { error?: string };
       if (!response.ok || !("scenarios" in payload)) {
         throw new Error("error" in payload && payload.error ? payload.error : "Research service unavailable");
       }
       setAnalysis(payload);
       setNotice("Live Codex web research");
+      setHistoryWarning(payload.historyWarning ?? null);
+      void refreshHistory();
     } catch (caught) {
       const message = controller.signal.aborted
         ? "Research cancelled. The previous analysis remains unchanged."
@@ -281,11 +387,17 @@ export default function Home() {
 
   return <main>
     <header className="topbar">
-      <a className="brand" href="#top" aria-label="Possible home"><span className="brandMark">P</span><span>Possible</span></a>
-      <nav aria-label="Primary"><a className="active" href="#analysis">Analysis</a><a href="#method">Method</a><a href="#sources">Sources</a></nav>
+      <a className="brand" href="#top" aria-label="Possible home" onClick={(event) => { event.preventDefault(); showAnalysisAnchor("#top"); }}><span className="brandMark">P</span><span>Possible</span></a>
+      <nav aria-label="Primary">
+        <button className={view === "analysis" ? "active" : ""} type="button" onClick={() => showAnalysisAnchor("#analysis")}>Analysis</button>
+        <button className={view === "history" ? "active" : ""} type="button" onClick={() => { setView("history"); void refreshHistory(); }}>History</button>
+        <button type="button" onClick={() => showAnalysisAnchor("#method")}>Method</button>
+        <button type="button" onClick={() => showAnalysisAnchor("#sources")}>Sources</button>
+      </nav>
       <div className="status"><span className="statusDot" /> Research agent ready</div>
     </header>
 
+    {view === "analysis" ? <>
     <section id="top" className="hero">
       <div className="eyebrow">THREE-YEAR SCENARIO ENGINE</div>
       <h1>Price the possible,<br /><em>not just the probable.</em></h1>
@@ -302,6 +414,7 @@ export default function Home() {
     </section>
 
     {error && <div className="errorBanner" role="alert"><strong>Analysis not replaced.</strong> {error}</div>}
+    {historyWarning && <div className="warningBanner" role="alert"><strong>History not saved.</strong> {historyWarning}</div>}
 
     <section id="analysis" className="analysisSection">
       <div className="sectionIntro">
@@ -382,6 +495,25 @@ export default function Home() {
     <section id="method" className="methodSection"><div className="methodCopy"><span className="kicker">HOW THE AGENT THINKS</span><h2>Evidence first.<br />Arithmetic on the server.</h2><p>The model gathers evidence and proposes assumptions. Deterministic code rates source coverage, derives valuations and returns, shrinks likelihoods, and normalizes the distribution.</p><div className="guardrail">Not investment advice. Outputs are uncertain estimates and should be stress-tested against your own assumptions.</div></div><ol className="pipeline">{["Resolve security, share class, currencies & timestamps", "Read filings and at least 10 quarters", "Answer 48 questions with claim-level citations", "Derive evidence quality from coverage and source independence", "Build 20 unique factor-state combinations", "Calculate valuation from revenue, margins, balance sheet, FX & dilution", "Partition terminal prices into non-overlapping outcome buckets", "Shrink likelihoods and normalize to 100.0%"].map((item, index) => <li key={item}><span>{String(index + 1).padStart(2, "0")}</span><p>{item}</p><i>{index < 3 ? "EVIDENCE" : index < 5 ? "AUDIT" : "SERVER"}</i></li>)}</ol></section>
 
     <section id="sources" className="sourcesSection"><div><span className="kicker">SOURCE LEDGER</span><h2>Traceable by design</h2><p>Primary status is derived from source type; exact dates and document URLs are required.</p></div><div className="sourceList">{analysis.sources.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.id}><span>↗</span><div><strong>[{source.id}] {source.title}</strong><small>{source.publisher} · published {source.publishedAt} · accessed {formatTimestamp(source.accessedAt)} · {source.type} · {source.primary ? "Primary" : "Secondary"}</small></div></a>)}</div></section>
+    </> : <section id="history" className="historySection">
+      <div className="historyIntro">
+        <div><span className="kicker">SAVED ANALYSES</span><h1>Historic analysis</h1><p>Every completed live run is dated and retained on your Mac. Reopen any snapshot or export it as a PDF.</p></div>
+        <button className="refreshButton" type="button" onClick={() => void refreshHistory()} disabled={historyLoading}>{historyLoading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+      {historyError && <div className="historyError" role="alert">{historyError}</div>}
+      {historyLoading && history.length === 0 ? <div className="historyEmpty">Loading saved analyses…</div> : history.length === 0 ? <div className="historyEmpty"><strong>No saved analyses yet.</strong><span>Complete a live analysis and it will appear here automatically.</span><button type="button" onClick={() => showAnalysisAnchor("#top")}>Run your first analysis →</button></div> : <div className="historyTable" role="table" aria-label="Historic stock analyses">
+        <div className="historyHead" role="row"><span>Analysis date</span><span>Company</span><span>Price then</span><span>Expected 3Y</span><span>Return</span><span>Confidence</span><span>Actions</span></div>
+        {history.map((item) => <div className="historyRow" role="row" key={item.id}>
+          <time dateTime={item.createdAt}><strong>{formatHistoryDate(item.createdAt)}</strong><small>Market data {formatHistoryDate(item.priceAsOf)}</small></time>
+          <div className="historyCompany"><strong>{item.company}</strong><small>{item.ticker} · {item.tradingCurrency}</small></div>
+          <strong>{formatMoney(item.currentPrice, item.tradingCurrency)}</strong>
+          <strong>{formatMoney(item.expectedPrice, item.tradingCurrency)}</strong>
+          <strong className={item.expectedTotalReturnPct >= 0 ? "positive" : "negative"}>{item.expectedTotalReturnPct >= 0 ? "+" : ""}{item.expectedTotalReturnPct.toFixed(1)}%</strong>
+          <span className="historyConfidence"><b>{item.confidence}</b>/100</span>
+          <div className="historyActions"><button type="button" onClick={() => void openHistoricalAnalysis(item)} disabled={historyAction !== null}>{historyAction === `open:${item.id}` ? "Opening…" : "Open"}</button><button type="button" onClick={() => void exportHistoricalAnalysis(item)} disabled={historyAction !== null}>{historyAction === `export:${item.id}` ? "Exporting…" : "Export PDF"}</button></div>
+        </div>)}
+      </div>}
+    </section>}
 
     <footer><span className="brand"><span className="brandMark">P</span>Possible</span><p>Built for clearer thinking under uncertainty.</p><span>Research model · v0.2</span></footer>
 

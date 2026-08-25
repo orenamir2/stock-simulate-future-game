@@ -6,6 +6,7 @@ import {
   processAnalysis,
   stampSourceAccessTimes,
 } from "../../../lib/analysis-engine";
+import { saveAnalysisHistory } from "../../../lib/analysis-history";
 import { researchFrameworkPrompt } from "../../../lib/research-framework";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -370,6 +371,26 @@ SCENARIO AND VALUATION RULES
       ...summarizeAnalysisOutput(stamped.value),
     });
     const data = processAnalysis(stamped.value, ticker, validationNow);
+    phase = "store-analysis";
+    let history;
+    try {
+      history = await saveAnalysisHistory(
+        { ...data, live: true, engine: "codex-cli" },
+        validationNow,
+      );
+    } catch (historyError) {
+      console.error("Completed analysis could not be persisted", {
+        requestId,
+        ticker,
+        errorMessage: historyError instanceof Error ? historyError.message : String(historyError),
+      });
+      return Response.json({
+        ...data,
+        live: true,
+        engine: "codex-cli",
+        historyWarning: "The analysis completed but could not be saved to history. Export it before leaving this page.",
+      });
+    }
     phase = "send-response";
     console.info("Analysis validation completed", {
       requestId,
@@ -380,8 +401,9 @@ SCENARIO AND VALUATION RULES
       researchCategoryCount: data.research.length,
       confidence: data.confidence,
       expectedPrice: data.expectedPrice,
+      historyId: history.id,
     });
-    return Response.json({ ...data, live: true, engine: "codex-cli" });
+    return Response.json({ ...data, live: true, engine: "codex-cli", history });
   } catch (error) {
     if (error instanceof AnalysisValidationError) {
       console.warn("Analysis validation failed", {
