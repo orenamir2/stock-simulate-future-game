@@ -123,6 +123,59 @@ test("still rejects duplicate source IDs and ticker mismatches", () => {
   assert.throws(() => processAnalysis(makeRawAnalysis(), "OTHER", fixtureNow), /Ticker mismatch/);
 });
 
+test("repairs incompatible singleton source references from compatible ledger entries", () => {
+  const raw = makeRawAnalysis();
+  raw.marketDataSourceId = "missing-market-source";
+  raw.latestFilingSourceId = "s5";
+  raw.fxSourceId = "s2";
+  const result = processFixture(raw);
+
+  assert.equal(result.marketDataSourceId, "s8");
+  assert.equal(result.latestFilingSourceId, "s1");
+  assert.equal(result.fxSourceId, "s8");
+});
+
+test("normalizes all same-currency FX values instead of rejecting the analysis", () => {
+  const raw = makeRawAnalysis();
+  raw.currentReportingToTradingFxRate = 1.2;
+  raw.fxRateAsOf = "2024-12-30T12:00:00Z";
+  raw.fxSourceId = "s4";
+  raw.scenarios[0].valuationInputs.reportingToTradingFxRate = 1.2;
+  const result = processFixture(raw);
+
+  assert.equal(result.currentReportingToTradingFxRate, 1);
+  assert.equal(result.fxRateAsOf, result.priceAsOf);
+  assert.equal(result.fxSourceId, result.marketDataSourceId);
+  assert.ok(result.scenarios.every(({ valuationInputs }) => valuationInputs.reportingToTradingFxRate === 1));
+  assert.equal(result.scenarios.length, 20);
+});
+
+test("repairs cross-currency FX references only from identifiable FX evidence", () => {
+  const raw = makeRawAnalysis();
+  raw.tradingCurrency = "EUR";
+  raw.currentReportingToTradingFxRate = 0.96;
+  raw.fxSourceId = "s2";
+  raw.sources[3].title = "USD to EUR foreign exchange rate";
+  raw.scenarios.forEach(({ valuationInputs }) => {
+    valuationInputs.reportingToTradingFxRate = 0.96;
+  });
+  const result = processFixture(raw);
+
+  assert.equal(result.fxSourceId, "s4");
+  assert.equal(result.currentReportingToTradingFxRate, 0.96);
+});
+
+test("still rejects singleton references when the ledger has no compatible source", () => {
+  const raw = makeRawAnalysis();
+  raw.sources = raw.sources.map((source) => source.type === "market" ? { ...source, type: "news" } : source);
+  assert.throws(
+    () => processFixture(raw),
+    (error) => error instanceof AnalysisValidationError &&
+      /marketDataSourceId has no compatible market source/.test(error.message) &&
+      error.details.field === "marketDataSourceId",
+  );
+});
+
 test("stamps model-supplied source access times with the authoritative server time", () => {
   const raw = makeRawAnalysis();
   raw.sources[1].accessedAt = "2025-01-01T02:00:00Z";
