@@ -43,7 +43,7 @@ For private GHCR pulls, configure repository secret `GHCR_PAT` with `read:packag
 
 The app is exposed locally at `http://localhost:8080`.
 
-Completed live analyses are written as individual JSON snapshots and shown in the History tab. The Kubernetes deployment mounts the `possible-analysis-history` PVC at `/var/lib/possible/analysis-history`; its retained host-path PV stores the files on the Mac under `data/analysis-history`. If the repository is moved, update `spec.hostPath.path` in `k8s/history-storage.yaml` before applying the manifests. Local `npm run dev` uses that same project folder by default, or `ANALYSIS_HISTORY_DIR` when set.
+Completed live analyses are written as individual JSON snapshots and shown in the History tab. The Kubernetes deployment mounts the `possible-analysis-history` PVC at `/var/lib/possible/analysis-history`. In this multi-node kind cluster, a `hostPath` is stored inside one virtual node's container filesystem; it is not automatically shared between kind nodes merely because they all run on the same Mac. The deployment is therefore pinned to `desktop-worker2`, which owns the retained history directory. Recreating that kind node also recreates its filesystem, so copy important snapshots out of the cluster before rebuilding it. Local `npm run dev` uses the project folder at `data/analysis-history` by default, or `ANALYSIS_HISTORY_DIR` when set.
 
 ## Manual container test
 

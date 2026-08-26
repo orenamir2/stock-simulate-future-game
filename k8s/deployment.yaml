@@ -21,6 +21,10 @@ spec:
       labels:
         app.kubernetes.io/name: possible
     spec:
+      # kind hostPath volumes live in each virtual node's container filesystem.
+      # Keep this stateful workload on the node that owns the retained history.
+      nodeSelector:
+        kubernetes.io/hostname: desktop-worker2
       imagePullSecrets:
         - name: ghcr-pull
       securityContext:
