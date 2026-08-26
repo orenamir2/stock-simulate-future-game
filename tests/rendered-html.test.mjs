@@ -52,6 +52,12 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(engine, /unexpected fields/);
   assert.match(route, /codex/);
   assert.match(route, /--output-schema/);
+  assert.match(route, /--json/);
+  assert.match(route, /Analysis step \$\{step\}\/\$\{ANALYSIS_STEP_COUNT\}/);
+  assert.match(route, /retrieve-live-evidence/);
+  assert.match(route, /generate-structured-analysis/);
+  assert.match(route, /Analysis progress heartbeat/);
+  assert.doesNotMatch(route, /Codex research still running/);
   assert.match(route, /--sandbox/);
   assert.match(route, /read-only/);
   assert.match(route, /web_search="live"/);

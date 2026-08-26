@@ -102,6 +102,11 @@ test("requires evidence for every answered research question", () => {
   const raw = makeRawAnalysis();
   raw.research[0].questions[0].sourceIds = [];
   assert.throws(() => processFixture(raw), /answered question without evidence/);
+
+  const partial = makeRawAnalysis();
+  partial.research[0].questions[0].status = "partial";
+  partial.research[0].questions[0].sourceIds = [];
+  assert.throws(() => processFixture(partial), /partial question without evidence/);
 });
 
 test("merges duplicate source URLs and remaps every citation", () => {
@@ -157,4 +162,35 @@ test("rejects homepage and private-network source URLs", () => {
   const privateHost = makeRawAnalysis();
   privateHost.sources[2].url = "http://127.0.0.1/document";
   assert.throws(() => processFixture(privateHost), /private host/);
+
+  const placeholder = makeRawAnalysis();
+  placeholder.sources[0].url = "https://example.invalid/not-real-evidence";
+  assert.throws(() => processFixture(placeholder), /real, retrievable evidence source/);
+});
+
+test("rejects analyses with effectively empty research", () => {
+  const raw = makeRawAnalysis();
+  for (const finding of raw.research) {
+    for (const question of finding.questions) {
+      question.status = "unanswered";
+      question.sourceIds = [];
+    }
+  }
+  assert.throws(
+    () => processFixture(raw),
+    (error) => error instanceof AnalysisValidationError
+      && error.details.check === "minimum-research-coverage",
+  );
+});
+
+test("rejects analyses that collapse to too few distinct scenarios", () => {
+  const raw = makeRawAnalysis();
+  for (let index = 1; index < raw.scenarios.length; index += 1) {
+    raw.scenarios[index].valuationInputs = structuredClone(raw.scenarios[0].valuationInputs);
+  }
+  assert.throws(
+    () => processFixture(raw),
+    (error) => error instanceof AnalysisValidationError
+      && error.details.check === "minimum-distinct-scenarios",
+  );
 });

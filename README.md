@@ -21,6 +21,8 @@ The research route invokes `codex exec` in non-interactive, ephemeral, read-only
 
 Research runs use live web search, low reasoning effort, and a 60-minute safety timeout by default. Set `CODEX_REASONING_EFFORT` or `CODEX_TIMEOUT_MS` to tune those operational limits; Kubernetes declares the same defaults in `k8s/deployment.yaml`.
 
+Pod logs report eight numbered phases for each request: admission, prompt/schema preparation, Codex planning, live evidence retrieval, structured generation, output parsing and source stamping, validation/calculation, and persistence/response delivery. Codex JSONL events drive the research phases, so web-search counts and the latest event appear in the periodic progress heartbeat instead of a generic running message. Every entry includes the request ID and ticker for filtering.
+
 Expected terminal price is `Σ (scenario probability × scenario price) / 100`. Expected total return and expected annualized return are calculated per scenario—including modeled dividends—and then probability-weighted. This avoids presenting the CAGR of the mean terminal price as though it were the mean scenario CAGR. Outputs are uncertain estimates, not investment advice.
 
 ## GHCR and local Kubernetes CI/CD
