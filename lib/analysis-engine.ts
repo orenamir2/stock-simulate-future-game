@@ -37,6 +37,8 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 const CURRENCY = /^[A-Z]{3}$/;
 const EPSILON = 1e-9;
+const MIN_RESEARCH_COVERAGE = 12;
+const MIN_RETAINED_SCENARIOS = 10;
 
 export class AnalysisValidationError extends Error {
   readonly details: Record<string, unknown>;
@@ -171,6 +173,14 @@ function isPrivateHostname(hostname: string): boolean {
   );
 }
 
+function isReservedEvidenceHostname(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return normalized === "example.invalid"
+    || normalized.endsWith(".invalid")
+    || normalized === "localhost"
+    || normalized.endsWith(".localhost");
+}
+
 function parseSource(value: unknown, index: number): Omit<Source, "primary"> {
   if (!isRecord(value)) fail(`sources[${index}] must be an object`);
   assertKeys(value, ["id", "title", "publisher", "publishedAt", "accessedAt", "url", "type"], `sources[${index}]`);
@@ -186,6 +196,9 @@ function parseSource(value: unknown, index: number): Omit<Source, "primary"> {
     fail(`sources[${index}].url must be an HTTP(S) URL without credentials`);
   }
   if (isPrivateHostname(parsedUrl.hostname)) fail(`sources[${index}].url cannot target a private host`);
+  if (isReservedEvidenceHostname(parsedUrl.hostname)) {
+    fail(`sources[${index}].url must identify a real, retrievable evidence source`);
+  }
   if (parsedUrl.pathname === "/" && !parsedUrl.search) {
     fail(`sources[${index}].url must identify a document or data page, not a homepage`);
   }
@@ -796,8 +809,8 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     auditReferences(finding.sourceIds, sourceIds, finding.categoryId);
     for (const question of finding.questions) {
       auditReferences(question.sourceIds, sourceIds, `${finding.categoryId} question ${question.questionIndex}`);
-      if (question.status === "answered" && question.sourceIds.length === 0) {
-        fail(`${finding.categoryId} has an answered question without evidence`);
+      if (question.status !== "unanswered" && question.sourceIds.length === 0) {
+        fail(`${finding.categoryId} has a ${question.status} question without evidence`);
       }
     }
     return {
@@ -809,6 +822,16 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
         .map(({ questionIndex }) => category.questions[questionIndex]),
     };
   });
+  const researchCoverage = raw.research.flatMap(({ questions }) => questions).reduce(
+    (total, question) => total + (question.status === "answered" ? 1 : question.status === "partial" ? 0.5 : 0),
+    0,
+  );
+  if (researchCoverage < MIN_RESEARCH_COVERAGE) {
+    fail(
+      `Research evidence is insufficient: ${researchCoverage} of 48 coverage points; at least ${MIN_RESEARCH_COVERAGE} required`,
+      { check: "minimum-research-coverage", researchCoverage, minimum: MIN_RESEARCH_COVERAGE },
+    );
+  }
 
   const scenarioInputCount = 20;
   const scenarioValidationDrops: Array<{ scenario: string; reason: string }> = [];
@@ -838,6 +861,16 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
 
   const deduplicated = mergeDuplicateScenarios(referenceValidScenarios);
   const priceRecovered = recoverScenarioPrices(deduplicated.scenarios, raw.baseline, raw.currentPrice);
+  if (priceRecovered.scenarios.length < MIN_RETAINED_SCENARIOS) {
+    fail(
+      `Scenario analysis is degenerate: only ${priceRecovered.scenarios.length} distinct scenarios remained; at least ${MIN_RETAINED_SCENARIOS} required`,
+      {
+        check: "minimum-distinct-scenarios",
+        scenarioCount: priceRecovered.scenarios.length,
+        minimum: MIN_RETAINED_SCENARIOS,
+      },
+    );
+  }
   const recoveryCount =
     scenarioInputCount - raw.scenarios.length +
     scenarioValidationDrops.length +
@@ -878,4 +911,26 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
       ? `Evidence-shrunk relative likelihoods; ${recoveryCount} invalid or overlapping scenario${recoveryCount === 1 ? "" : "s"} consolidated; server-normalized to 100.0%`
       : "Evidence-shrunk relative likelihoods; server-normalized to 100.0%",
   };
+}
+
+export function isAnalysisPublishable(value: Analysis): boolean {
+  const researchCoverage = Array.isArray(value.research)
+    ? value.research.flatMap(({ questions }) => questions ?? []).reduce(
+      (total, question) => total + (question.status === "answered" ? 1 : question.status === "partial" ? 0.5 : 0),
+      0,
+    )
+    : 0;
+  const sourcesAreReal = Array.isArray(value.sources) && value.sources.length >= 8 && value.sources.every((source) => {
+    try {
+      return !isReservedEvidenceHostname(new URL(source.url).hostname);
+    } catch {
+      return false;
+    }
+  });
+  return Number.isFinite(value.confidence)
+    && value.confidence > 0
+    && Array.isArray(value.scenarios)
+    && value.scenarios.length >= MIN_RETAINED_SCENARIOS
+    && researchCoverage >= MIN_RESEARCH_COVERAGE
+    && sourcesAreReal;
 }

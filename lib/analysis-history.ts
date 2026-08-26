@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { isAnalysisPublishable } from "./analysis-engine.ts";
 import type { Analysis } from "./analysis-types";
 
 const HISTORY_FILE_PATTERN = /^[0-9TZ.-]+_[A-Z.-]{1,8}_[0-9a-f-]+\.json$/;
@@ -37,7 +38,8 @@ function isStoredAnalysis(value: unknown): value is StoredAnalysis {
     && typeof record.createdAt === "string"
     && Boolean(record.analysis)
     && typeof record.analysis?.ticker === "string"
-    && Array.isArray(record.analysis?.scenarios);
+    && Array.isArray(record.analysis?.scenarios)
+    && isAnalysisPublishable(record.analysis as Analysis);
 }
 
 function summary(record: StoredAnalysis): AnalysisHistorySummary {

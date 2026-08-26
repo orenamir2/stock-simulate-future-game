@@ -14,7 +14,42 @@ const DEFAULT_CODEX_TIMEOUT_MS = 3_600_000;
 const CODEX_PROGRESS_INTERVAL_MS = 60_000;
 const RESPONSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const ANALYSIS_STEP_COUNT = 8;
 let researchInProgress = false;
+
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function logAnalysisStep(
+  requestId: string,
+  ticker: string,
+  step: number,
+  phase: string,
+  description: string,
+  details: JsonRecord = {},
+) {
+  console.info(`Analysis step ${step}/${ANALYSIS_STEP_COUNT}: ${description}`, {
+    requestId,
+    ticker,
+    step,
+    totalSteps: ANALYSIS_STEP_COUNT,
+    phase,
+    ...details,
+  });
+}
+
+function codexEventItem(event: JsonRecord): JsonRecord | null {
+  return isRecord(event.item) ? event.item : null;
+}
+
+function codexSearchQuery(item: JsonRecord): string | null {
+  if (typeof item.query === "string") return item.query;
+  if (isRecord(item.action) && typeof item.action.query === "string") return item.action.query;
+  return null;
+}
 
 class CodexTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
@@ -87,6 +122,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
   const reasoningEffort = codexReasoningEffort();
   const args = [
     "exec",
+    "--json",
     "--ignore-user-config",
     "--config",
     'web_search="live"',
@@ -117,6 +153,102 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
     let stdoutChunks = 0;
     let stderrChunks = 0;
     let lastOutputAt: number | null = null;
+    let jsonLineBuffer = "";
+    let finalMessage = "";
+    let currentStep = 2;
+    let currentPhase = "initialize-codex";
+    let currentDescription = "initialize the Codex research agent";
+    let lastEventType: string | null = null;
+    let webSearchCount = 0;
+    let reasoningItemCount = 0;
+    let eventCount = 0;
+
+    const updateProgress = (
+      step: number,
+      phase: string,
+      description: string,
+      details: JsonRecord = {},
+      forceLog = false,
+    ) => {
+      const changed = step !== currentStep || phase !== currentPhase;
+      currentStep = step;
+      currentPhase = phase;
+      currentDescription = description;
+      if (changed || forceLog) {
+        logAnalysisStep(requestId, ticker, step, phase, description, {
+          elapsedMs: Date.now() - startedAt,
+          webSearchCount,
+          reasoningItemCount,
+          ...details,
+        });
+      }
+    };
+
+    const handleCodexEvent = (event: JsonRecord) => {
+      eventCount += 1;
+      const eventType = typeof event.type === "string" ? event.type : "unknown";
+      lastEventType = eventType;
+      const item = codexEventItem(event);
+      const itemType = item && typeof item.type === "string" ? item.type : null;
+
+      if (eventType === "thread.started") {
+        updateProgress(3, "plan-research", "plan the company research and evidence gathering");
+        return;
+      }
+      if (itemType === "web_search" || itemType === "web_search_call") {
+        if (eventType === "item.completed") webSearchCount += 1;
+        const query = codexSearchQuery(item);
+        updateProgress(
+          4,
+          "retrieve-live-evidence",
+          "retrieve current filings, market data, and independent evidence",
+          {
+            codexEventType: eventType,
+            webSearchQuery: query,
+          },
+          eventType === "item.completed",
+        );
+        return;
+      }
+      if (itemType === "reasoning" && eventType === "item.completed") {
+        reasoningItemCount += 1;
+        updateProgress(
+          Math.max(currentStep, 3),
+          currentStep >= 4 ? currentPhase : "analyze-evidence",
+          currentStep >= 4
+            ? currentDescription
+            : "analyze retrieved evidence against the 48-question framework",
+        );
+        return;
+      }
+      if (itemType === "agent_message" && eventType === "item.completed") {
+        if (typeof item.text === "string") finalMessage = item.text;
+        updateProgress(5, "generate-structured-analysis", "generate the schema-constrained analysis JSON");
+        return;
+      }
+      if (eventType === "turn.completed") {
+        updateProgress(5, "generate-structured-analysis", "finish the schema-constrained analysis JSON");
+      }
+    };
+
+    const consumeJsonLines = (final = false) => {
+      const lines = jsonLineBuffer.split(/\r?\n/);
+      jsonLineBuffer = final ? "" : (lines.pop() ?? "");
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line) as unknown;
+          if (isRecord(event)) handleCodexEvent(event);
+        } catch (error) {
+          console.warn("Codex emitted an unreadable JSONL event", {
+            requestId,
+            ticker,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            linePreview: line.slice(0, 300),
+          });
+        }
+      }
+    };
 
     const finish = (error?: Error) => {
       if (settled) return;
@@ -137,7 +269,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
           stderrChunks,
           stderrTail: stderr.trim().slice(-2_000) || null,
         });
-        resolve(stdout.trim());
+        resolve(finalMessage.trim());
       }
     };
     const abort = () => {
@@ -165,15 +297,23 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
       finish(new CodexTimeoutError(timeoutMs));
     }, timeoutMs);
     const progressTimer = setInterval(() => {
-      console.info("Codex research still running", {
+      console.info(`Analysis progress heartbeat — step ${currentStep}/${ANALYSIS_STEP_COUNT}: ${currentDescription}`, {
         requestId,
         ticker,
+        step: currentStep,
+        totalSteps: ANALYSIS_STEP_COUNT,
+        phase: currentPhase,
+        description: currentDescription,
         pid: child.pid,
         elapsedMs: Date.now() - startedAt,
         stdoutBytes: Buffer.byteLength(stdout, "utf8"),
         stderrBytes: Buffer.byteLength(stderr, "utf8"),
         stdoutChunks,
         stderrChunks,
+        eventCount,
+        webSearchCount,
+        reasoningItemCount,
+        lastEventType,
         msSinceLastOutput: lastOutputAt === null ? null : Date.now() - lastOutputAt,
         stderrTail: stderr.trim().slice(-1_000) || null,
       });
@@ -194,6 +334,8 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
       stdoutChunks += 1;
       lastOutputAt = Date.now();
       stdout = append(stdout, chunk);
+      jsonLineBuffer += chunk.toString("utf8");
+      consumeJsonLines();
     });
     child.stderr.on("data", (chunk: Buffer) => {
       stderrChunks += 1;
@@ -213,6 +355,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
     });
     child.on("close", (code) => {
       if (settled) return;
+      consumeJsonLines(true);
       if (code !== 0) {
         const detail = stderr.trim().slice(-4_000);
         console.error("Codex research process exited unsuccessfully", {
@@ -226,7 +369,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
         finish(new Error(`Codex exited with status ${code}${detail ? `: ${detail}` : ""}`));
         return;
       }
-      if (!stdout.trim()) {
+      if (!finalMessage.trim()) {
         console.error("Codex research process returned no output", {
           requestId,
           ticker,
@@ -234,7 +377,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
           elapsedMs: Date.now() - startedAt,
           stderrTail: stderr.trim().slice(-4_000) || null,
         });
-        finish(new Error("Codex returned an empty result"));
+        finish(new Error("Codex returned no final agent message"));
         return;
       }
       finish();
@@ -353,8 +496,12 @@ SCENARIO AND VALUATION RULES
 - For each scenario provide explicit valuationInputs. forecast revenue is server-derived from baseline revenue and three years of revenueCagrPct. For enterprise-value-multiple use revenue, EBIT or free cash flow; server calculates EV = metric × multiple and equity = EV + net cash. For equity-value-multiple use net income or book value; server calculates equity = metric × multiple. For NAV use NAV or book value. The server then converts reporting currency to trading currency and divides by diluted shares.
 - Model dilution/buybacks in dilutedShares, balance-sheet change in netCash or balanceSheetValue, FX in reportingToTradingFxRate, and dividends in cumulativeDividendsPerShare. Use sector-appropriate metrics and materially different assumptions across cases.
 - Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice. Return only the JSON object required by the supplied schema.`;
+    logAnalysisStep(requestId, ticker, 2, "prepare-codex", "assemble the research prompt and output schema", {
+      requestStartedAt: requestStartedAt.toISOString(),
+    });
     const output = await runCodex(prompt, ticker, requestId, signal);
     phase = "parse-codex-output";
+    logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times");
     const raw = JSON.parse(output) as unknown;
     const validationNow = new Date();
     const stamped = stampSourceAccessTimes(raw, validationNow);
@@ -364,14 +511,13 @@ SCENARIO AND VALUATION RULES
       ...stamped.diagnostics,
     });
     phase = "validate-analysis";
-    console.info("Analysis validation started", {
-      requestId,
-      ticker,
+    logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
       validationNow: validationNow.toISOString(),
       ...summarizeAnalysisOutput(stamped.value),
     });
     const data = processAnalysis(stamped.value, ticker, validationNow);
     phase = "store-analysis";
+    logAnalysisStep(requestId, ticker, 8, phase, "persist the completed analysis and prepare the API response");
     let history;
     try {
       history = await saveAnalysisHistory(
@@ -392,9 +538,7 @@ SCENARIO AND VALUATION RULES
       });
     }
     phase = "send-response";
-    console.info("Analysis validation completed", {
-      requestId,
-      ticker,
+    logAnalysisStep(requestId, ticker, 8, phase, "complete persistence and send the validated analysis response", {
       elapsedMs: Date.now() - requestStartedAt.getTime(),
       sourceCount: data.sources.length,
       scenarioCount: data.scenarios.length,
@@ -503,9 +647,7 @@ export async function POST(request: Request) {
   }
 
   researchInProgress = true;
-  console.info("Analysis request accepted", {
-    requestId,
-    ticker,
+  logAnalysisStep(requestId, ticker, 1, "admission", "accept and validate the ticker research request", {
     requestStartedAt: requestStartedAt.toISOString(),
   });
   return streamAnalysisResponse(request, requestId, requestStartedAt, ticker);
