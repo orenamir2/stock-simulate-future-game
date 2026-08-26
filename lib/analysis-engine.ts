@@ -509,6 +509,107 @@ function mergeDuplicateSources(raw: RawAnalysis): RawAnalysis {
   };
 }
 
+type InstrumentSourceReference = "marketDataSourceId" | "latestFilingSourceId" | "fxSourceId";
+
+const INSTRUMENT_SOURCE_RULES: Array<{
+  field: InstrumentSourceReference;
+  allowedTypes: readonly SourceType[];
+}> = [
+  { field: "marketDataSourceId", allowedTypes: ["market"] },
+  { field: "latestFilingSourceId", allowedTypes: ["filing", "company"] },
+  { field: "fxSourceId", allowedTypes: ["market", "government"] },
+];
+
+function sourceReferenceScore(
+  field: InstrumentSourceReference,
+  source: RawAnalysis["sources"][number],
+  raw: RawAnalysis,
+): number {
+  const searchable = `${source.title} ${source.publisher} ${source.url}`.toLowerCase();
+  if (field === "marketDataSourceId") {
+    return /\b(quote|price|market|exchange)\b/.test(searchable) ? 10 : 0;
+  }
+  if (field === "latestFilingSourceId") {
+    return (source.type === "filing" ? 20 : 0) + (/\b(10-k|10-q|20-f|annual|quarter|filing|results)\b/.test(searchable) ? 10 : 0);
+  }
+  const currencies = `${raw.reportingCurrency.toLowerCase()}|${raw.tradingCurrency.toLowerCase()}`;
+  return /\b(fx|forex|foreign exchange|exchange rate|currency)\b/.test(searchable)
+    ? 20
+    : new RegExp(`\\b(${currencies})\\b`).test(searchable) ? 10 : 0;
+}
+
+function repairInstrumentSourceReferences(raw: RawAnalysis): RawAnalysis {
+  const sourceMap = new Map(raw.sources.map((source) => [source.id, source]));
+  const repairs: Array<{ field: InstrumentSourceReference; previousId: string; replacementId: string }> = [];
+  let repaired = raw;
+
+  for (const { field, allowedTypes } of INSTRUMENT_SOURCE_RULES) {
+    const currentId = repaired[field];
+    const current = sourceMap.get(currentId);
+    if (current && allowedTypes.includes(current.type)) continue;
+
+    // No conversion takes place when currencies match, so the already-validated
+    // market quote is the most accurate deterministic reference for the 1:1 rate.
+    const sameCurrencyFxCandidate = field === "fxSourceId" &&
+      repaired.tradingCurrency === repaired.reportingCurrency
+      ? sourceMap.get(repaired.marketDataSourceId)
+      : undefined;
+    const compatibleSources = repaired.sources.filter((source) => allowedTypes.includes(source.type));
+    const repairCandidates = field === "fxSourceId" && repaired.tradingCurrency !== repaired.reportingCurrency
+      ? compatibleSources.filter((source) => sourceReferenceScore(field, source, repaired) > 0)
+      : compatibleSources;
+    const candidates = sameCurrencyFxCandidate && allowedTypes.includes(sameCurrencyFxCandidate.type)
+      ? [sameCurrencyFxCandidate]
+      : repairCandidates
+        .sort((a, b) =>
+          sourceReferenceScore(field, b, repaired) - sourceReferenceScore(field, a, repaired) ||
+          b.publishedAt.localeCompare(a.publishedAt) ||
+          a.id.localeCompare(b.id)
+        );
+    const replacement = candidates[0];
+    if (!replacement) {
+      fail(`${field} has no compatible ${allowedTypes.join(" or ")} source in the source ledger`, {
+        check: "instrument-source-reference",
+        field,
+        sourceId: currentId,
+        allowedTypes,
+        requiresFxEvidence: field === "fxSourceId" && repaired.tradingCurrency !== repaired.reportingCurrency,
+      });
+    }
+    repaired = { ...repaired, [field]: replacement.id };
+    repairs.push({ field, previousId: currentId, replacementId: replacement.id });
+  }
+
+  if (repairs.length > 0) console.warn("Repaired instrument source references", { repairs });
+  return repaired;
+}
+
+function normalizeSameCurrencyFx(raw: RawAnalysis): RawAnalysis {
+  if (raw.tradingCurrency !== raw.reportingCurrency) return raw;
+  const scenarioRepairCount = raw.scenarios.filter(
+    ({ valuationInputs }) => Math.abs(valuationInputs.reportingToTradingFxRate - 1) > 0.001,
+  ).length;
+  const topLevelChanged = Math.abs(raw.currentReportingToTradingFxRate - 1) > 0.001 ||
+    raw.fxRateAsOf !== raw.priceAsOf || raw.fxSourceId !== raw.marketDataSourceId;
+  if (!topLevelChanged && scenarioRepairCount === 0) return raw;
+
+  console.warn("Normalized same-currency FX metadata", {
+    currency: raw.tradingCurrency,
+    topLevelChanged,
+    scenarioRepairCount,
+  });
+  return {
+    ...raw,
+    currentReportingToTradingFxRate: 1,
+    fxRateAsOf: raw.priceAsOf,
+    fxSourceId: raw.marketDataSourceId,
+    scenarios: raw.scenarios.map((scenario) => ({
+      ...scenario,
+      valuationInputs: { ...scenario.valuationInputs, reportingToTradingFxRate: 1 },
+    })),
+  };
+}
+
 function deriveEvidenceStrength(finding: RawResearchFinding, sourceMap: Map<string, Source>): number {
   const referenced = new Set([...finding.sourceIds, ...finding.questions.flatMap(({ sourceIds }) => sourceIds)]);
   const sources = [...referenced].map((id) => sourceMap.get(id)).filter((source): source is Source => Boolean(source));
@@ -724,14 +825,12 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   const parsed = parseRawAnalysis(value);
   const parsedSourceIds = new Set(parsed.sources.map(({ id }) => id));
   if (parsedSourceIds.size !== parsed.sources.length) fail("Source IDs must be unique");
-  const raw = mergeDuplicateSources(parsed);
+  let raw = mergeDuplicateSources(parsed);
   if (raw.ticker !== requestedTicker.toUpperCase()) fail("Ticker mismatch");
   if (!CURRENCY.test(raw.tradingCurrency) || !CURRENCY.test(raw.reportingCurrency)) {
     fail("Trading and reporting currencies must be ISO 4217 codes");
   }
-  if (raw.tradingCurrency === raw.reportingCurrency && Math.abs(raw.currentReportingToTradingFxRate - 1) > 0.001) {
-    fail("FX rate must be 1 when trading and reporting currencies match");
-  }
+  raw = normalizeSameCurrencyFx(repairInstrumentSourceReferences(raw));
   const nowMs = now.getTime();
   const priceAsOfMs = new Date(raw.priceAsOf).getTime();
   const fxAsOfMs = new Date(raw.fxRateAsOf).getTime();
