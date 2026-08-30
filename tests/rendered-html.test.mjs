@@ -20,6 +20,9 @@ test("server-renders the scenario product", async () => {
   assert.match(html, /Probability check/);
   assert.match(html, /Export PDF/);
   assert.match(html, /History/);
+  assert.match(html, /South Korea/);
+  assert.match(html, /Israel/);
+  assert.match(html, /005930/);
   assert.match(html, /100/);
   assert.match(html, /Not investment advice/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/i);

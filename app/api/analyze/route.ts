@@ -7,6 +7,13 @@ import {
   stampSourceAccessTimes,
 } from "../../../lib/analysis-engine";
 import { saveAnalysisHistory } from "../../../lib/analysis-history";
+import {
+  isMarket,
+  isValidSecurityCode,
+  marketResearchContext,
+  normalizeSecurityCode,
+  type Market,
+} from "../../../lib/market-support";
 import { researchFrameworkPrompt } from "../../../lib/research-framework";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
@@ -398,6 +405,7 @@ function streamAnalysisResponse(
   requestId: string,
   requestStartedAt: Date,
   ticker: string,
+  market: Market,
 ): Response {
   const encoder = new TextEncoder();
   const researchController = new AbortController();
@@ -435,7 +443,7 @@ function streamAnalysisResponse(
       keepaliveTimer = setInterval(() => enqueue("\n"), RESPONSE_KEEPALIVE_INTERVAL_MS);
       keepaliveTimer.unref?.();
 
-      void completeAnalysis(requestId, requestStartedAt, ticker, researchController.signal)
+      void completeAnalysis(requestId, requestStartedAt, ticker, market, researchController.signal)
         .then(async (response) => enqueue(await response.text()))
         .catch((error) => {
           console.error("Analysis response stream failed", {
@@ -469,17 +477,22 @@ async function completeAnalysis(
   requestId: string,
   requestStartedAt: Date,
   ticker: string,
+  market: Market,
   signal: AbortSignal,
 ): Promise<Response> {
   let phase = "codex-research";
   try {
-    const prompt = `Act as a skeptical, evidence-led public-equity scenario analyst. Research ${ticker} using current web sources and built-in web search. Do not run shell commands or modify files. The server—not you—calculates probabilities, valuation outputs, confidence and returns.
+    const prompt = `Act as a skeptical, evidence-led public-equity scenario analyst. Research the requested security identifier ${ticker} using current web sources and built-in web search. Do not run shell commands or modify files. The server—not you—calculates probabilities, valuation outputs, confidence and returns.
 
 REQUEST CONTEXT
 - The server started this request at ${requestStartedAt.toISOString()}. Do not emit price, FX, publication or access timestamps later than this UTC time.
+- ${marketResearchContext(market)}
+- Return ticker exactly as ${ticker} so the server can bind the result to this request; put the official exchange and durable local identifier in exchange and instrumentId.
 
 RESEARCH RULES
 - Resolve the exact security: exchange, security type, share class, durable instrument ID, trading currency, reporting currency, ADR ratio, fresh price and ISO-8601 price timestamp. Cite the exact market-data source ID.
+- Use the primary listed security requested, not a U.S. ADR or OTC line, unless the identifier explicitly names that instrument. Apply the exchange's local timezone when deciding which quote is latest.
+- Express prices, dividends and per-share valuation outputs in the major unit represented by tradingCurrency. Convert pence, agorot, euro cents and other minor-unit market quotes to GBP, ILS, EUR or the applicable ISO currency before returning numbers, and keep that unit consistent across currentPrice and every scenario.
 - Before returning JSON, audit the three singleton source references against the source ledger: marketDataSourceId must point to type market; latestFilingSourceId must point to type filing or company; fxSourceId must point to type market or government. Every referenced ID must exist.
 - State the latest fiscal-data date. Populate baseline with trailing-twelve-month financials in reporting currency and one consistent scale. dilutedShares must use the same millions/billions scale as the monetary values and, for an ADR, must represent traded depositary-share equivalents after applying adrRatio.
 - When currencies match, set currentReportingToTradingFxRate and each scenario reportingToTradingFxRate to 1, set fxRateAsOf equal to priceAsOf, and set fxSourceId equal to marketDataSourceId. Otherwise cite a fresh market or government FX source and use reporting-currency value × FX rate = trading-currency value.
@@ -613,8 +626,9 @@ export async function POST(request: Request) {
   const requestId = randomUUID();
   const requestStartedAt = new Date();
   let ticker: string | undefined;
+  let marketValue: unknown;
   try {
-    ({ ticker } = (await request.json()) as { ticker?: string });
+    ({ ticker, market: marketValue } = (await request.json()) as { ticker?: string; market?: unknown });
   } catch (error) {
     console.warn("Analysis request rejected", {
       requestId,
@@ -624,8 +638,9 @@ export async function POST(request: Request) {
     });
     return Response.json({ error: "Invalid JSON request" }, { status: 400 });
   }
-  ticker = ticker?.trim().toUpperCase();
-  if (!ticker || !/^[A-Z.-]{1,8}$/.test(ticker)) {
+  ticker = normalizeSecurityCode(typeof ticker === "string" ? ticker : "");
+  const market: Market = marketValue === undefined ? "auto" : isMarket(marketValue) ? marketValue : "auto";
+  if (!ticker || !isValidSecurityCode(ticker) || (marketValue !== undefined && !isMarket(marketValue))) {
     console.warn("Analysis request rejected", {
       requestId,
       phase: "parse-request",
@@ -651,5 +666,5 @@ export async function POST(request: Request) {
   logAnalysisStep(requestId, ticker, 1, "admission", "accept and validate the ticker research request", {
     requestStartedAt: requestStartedAt.toISOString(),
   });
-  return streamAnalysisResponse(request, requestId, requestStartedAt, ticker);
+  return streamAnalysisResponse(request, requestId, requestStartedAt, ticker, market);
 }

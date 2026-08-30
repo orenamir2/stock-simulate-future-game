@@ -3,6 +3,12 @@
 import { FormEvent, useMemo, useRef, useState } from "react";
 import { processAnalysis } from "../lib/analysis-engine";
 import type { Analysis, FactorStates, RawAnalysis } from "../lib/analysis-types";
+import {
+  isValidSecurityCode,
+  MARKET_OPTIONS,
+  normalizeSecurityCode,
+  type Market,
+} from "../lib/market-support";
 import { analysisReportFilename, createAnalysisReportPdf } from "../lib/pdf-report";
 import { researchFramework } from "../lib/research-framework";
 
@@ -227,6 +233,7 @@ function formatHistoryDate(value: string) {
 
 export default function Home() {
   const [query, setQuery] = useState("AAPL");
+  const [market, setMarket] = useState<Market>("auto");
   const [analysis, setAnalysis] = useState<Analysis>(() => makeSample());
   const [running, setRunning] = useState(false);
   const [stage, setStage] = useState(0);
@@ -340,8 +347,11 @@ export default function Home() {
 
   async function runAnalysis(event: FormEvent) {
     event.preventDefault();
-    const ticker = query.trim().toUpperCase();
-    if (!/^[A-Z.-]{1,8}$/.test(ticker)) return;
+    const ticker = normalizeSecurityCode(query);
+    if (!isValidSecurityCode(ticker)) {
+      setError("Enter a valid exchange symbol: up to 12 letters, numbers, dots or hyphens.");
+      return;
+    }
     const controller = new AbortController();
     controllerRef.current = controller;
     setRunning(true);
@@ -357,7 +367,7 @@ export default function Home() {
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker }),
+        body: JSON.stringify({ ticker, market }),
         signal: controller.signal,
       });
       const payload = await response.json() as AnalysisResponse | { error?: string };
@@ -403,12 +413,13 @@ export default function Home() {
       <h1>Price the possible,<br /><em>not just the probable.</em></h1>
       <p className="lede">An evidence-led agent that turns filings, market signals and explicit operating assumptions into probability-weighted futures.</p>
       <form className="tickerForm" onSubmit={runAnalysis}>
-        <label htmlFor="ticker">Stock ticker</label>
+        <label htmlFor="ticker">Exchange symbol</label>
         <div className="inputRow">
-          <div className="tickerInput"><span className="searchIcon">⌕</span><input id="ticker" value={query} onChange={(event) => setQuery(event.target.value.toUpperCase())} maxLength={8} autoComplete="off" aria-describedby="tickerHint" /></div>
+          <div className="marketSelect"><label className="srOnly" htmlFor="market">Market</label><select id="market" value={market} onChange={(event) => setMarket(event.target.value as Market)}>{MARKET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+          <div className="tickerInput"><span className="searchIcon">⌕</span><input id="ticker" value={query} onChange={(event) => setQuery(event.target.value.toUpperCase())} maxLength={12} autoComplete="off" aria-describedby="tickerHint" /></div>
           <button type="submit" disabled={running}>{running ? "Researching…" : "Run analysis"}<span aria-hidden="true">→</span></button>
         </div>
-        <span id="tickerHint">Try AAPL, MSFT, NVDA or any listed company</span>
+        <span id="tickerHint">Examples: AAPL · SAP.DE · 005930 (South Korea) · TEVA (Israel). Include an exchange suffix when a European symbol is ambiguous.</span>
       </form>
       <div className="heroMeta"><span><b>48</b> answered questions</span><i /><span><b>{analysis.scenarios.length}</b> outcome buckets</span><i /><span><b>3</b>-year horizon</span><i /><span><b>100.0%</b> server-normalized</span></div>
     </section>
