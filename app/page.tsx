@@ -5,6 +5,7 @@ import { processAnalysis } from "../lib/analysis-engine";
 import type { Analysis, FactorStates, RawAnalysis } from "../lib/analysis-types";
 import { analysisReportFilename, createAnalysisReportPdf } from "../lib/pdf-report";
 import { researchFramework } from "../lib/research-framework";
+import { isValidTicker, MAX_TICKER_LENGTH } from "../lib/ticker";
 
 const sampleScenarioInputs = [
   ["Category-defining AI device", 2, 360, "New hardware category creates a material replacement cycle."],
@@ -341,7 +342,7 @@ export default function Home() {
   async function runAnalysis(event: FormEvent) {
     event.preventDefault();
     const ticker = query.trim().toUpperCase();
-    if (!/^[A-Z.-]{1,8}$/.test(ticker)) return;
+    if (!isValidTicker(ticker)) return;
     const controller = new AbortController();
     controllerRef.current = controller;
     setRunning(true);
@@ -405,7 +406,7 @@ export default function Home() {
       <form className="tickerForm" onSubmit={runAnalysis}>
         <label htmlFor="ticker">Stock ticker</label>
         <div className="inputRow">
-          <div className="tickerInput"><span className="searchIcon">⌕</span><input id="ticker" value={query} onChange={(event) => setQuery(event.target.value.toUpperCase())} maxLength={8} autoComplete="off" aria-describedby="tickerHint" /></div>
+          <div className="tickerInput"><span className="searchIcon">⌕</span><input id="ticker" value={query} onChange={(event) => setQuery(event.target.value.toUpperCase())} maxLength={MAX_TICKER_LENGTH} autoComplete="off" aria-describedby="tickerHint" /></div>
           <button type="submit" disabled={running}>{running ? "Researching…" : "Run analysis"}<span aria-hidden="true">→</span></button>
         </div>
         <span id="tickerHint">Try AAPL, MSFT, NVDA or any listed company</span>
