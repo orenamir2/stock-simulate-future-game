@@ -39,6 +39,7 @@ const CURRENCY = /^[A-Z]{3}$/;
 const EPSILON = 1e-9;
 const MIN_RESEARCH_COVERAGE = 12;
 const MIN_RETAINED_SCENARIOS = 10;
+const MIN_RETAINED_SOURCES = 7;
 
 export class AnalysisValidationError extends Error {
   readonly details: Record<string, unknown>;
@@ -181,6 +182,15 @@ function isReservedEvidenceHostname(hostname: string): boolean {
     || normalized.endsWith(".localhost");
 }
 
+function isHomepageUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname === "/" && !parsed.search;
+  } catch {
+    return false;
+  }
+}
+
 function parseSource(value: unknown, index: number): Omit<Source, "primary"> {
   if (!isRecord(value)) fail(`sources[${index}] must be an object`);
   assertKeys(value, ["id", "title", "publisher", "publishedAt", "accessedAt", "url", "type"], `sources[${index}]`);
@@ -199,9 +209,6 @@ function parseSource(value: unknown, index: number): Omit<Source, "primary"> {
   if (isReservedEvidenceHostname(parsedUrl.hostname)) {
     fail(`sources[${index}].url must identify a real, retrievable evidence source`);
   }
-  if (parsedUrl.pathname === "/" && !parsedUrl.search) {
-    fail(`sources[${index}].url must identify a document or data page, not a homepage`);
-  }
   return {
     id: nonEmptyString(value.id, `sources[${index}].id`, 40),
     title: nonEmptyString(value.title, `sources[${index}].title`, 300),
@@ -210,6 +217,42 @@ function parseSource(value: unknown, index: number): Omit<Source, "primary"> {
     accessedAt: parseDate(value.accessedAt, `sources[${index}].accessedAt`, true),
     url,
     type,
+  };
+}
+
+function discardHomepageSources(raw: RawAnalysis): RawAnalysis {
+  const discarded = raw.sources.filter((source) => isHomepageUrl(source.url));
+  if (discarded.length === 0) return raw;
+
+  const discardedIds = new Set(discarded.map(({ id }) => id));
+  const retainIds = (ids: string[]) => ids.filter((id) => !discardedIds.has(id));
+  console.warn("Discarded homepage analysis sources", {
+    count: discarded.length,
+    sources: discarded.map(({ id, url }) => ({ id, url })),
+  });
+
+  return {
+    ...raw,
+    baseline: { ...raw.baseline, sourceIds: retainIds(raw.baseline.sourceIds) },
+    scenarios: raw.scenarios.map((scenario) => ({
+      ...scenario,
+      sourceIds: retainIds(scenario.sourceIds),
+    })),
+    research: raw.research.map((finding) => ({
+      ...finding,
+      sourceIds: retainIds(finding.sourceIds),
+      questions: finding.questions.map((question) => {
+        const sourceIds = retainIds(question.sourceIds);
+        return {
+          ...question,
+          sourceIds,
+          status: question.status !== "unanswered" && sourceIds.length === 0
+            ? "unanswered"
+            : question.status,
+        };
+      }),
+    })),
+    sources: raw.sources.filter(({ id }) => !discardedIds.has(id)),
   };
 }
 
@@ -825,7 +868,13 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   const parsed = parseRawAnalysis(value);
   const parsedSourceIds = new Set(parsed.sources.map(({ id }) => id));
   if (parsedSourceIds.size !== parsed.sources.length) fail("Source IDs must be unique");
-  let raw = mergeDuplicateSources(parsed);
+  let raw = mergeDuplicateSources(discardHomepageSources(parsed));
+  if (raw.sources.length < MIN_RETAINED_SOURCES) {
+    fail(
+      `Evidence ledger is insufficient: only ${raw.sources.length} usable sources remained; at least ${MIN_RETAINED_SOURCES} required`,
+      { check: "minimum-usable-sources", sourceCount: raw.sources.length, minimum: MIN_RETAINED_SOURCES },
+    );
+  }
   if (raw.ticker !== requestedTicker.toUpperCase()) fail("Ticker mismatch");
   if (!CURRENCY.test(raw.tradingCurrency) || !CURRENCY.test(raw.reportingCurrency)) {
     fail("Trading and reporting currencies must be ISO 4217 codes");
@@ -1019,9 +1068,10 @@ export function isAnalysisPublishable(value: Analysis): boolean {
       0,
     )
     : 0;
-  const sourcesAreReal = Array.isArray(value.sources) && value.sources.length >= 8 && value.sources.every((source) => {
+  const sourcesAreReal = Array.isArray(value.sources) && value.sources.length >= MIN_RETAINED_SOURCES && value.sources.every((source) => {
     try {
-      return !isReservedEvidenceHostname(new URL(source.url).hostname);
+      const parsed = new URL(source.url);
+      return !isReservedEvidenceHostname(parsed.hostname) && !isHomepageUrl(source.url);
     } catch {
       return false;
     }

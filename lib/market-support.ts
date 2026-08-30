@@ -1,3 +1,5 @@
+import { isValidTicker } from "./ticker.ts";
+
 export const MARKET_OPTIONS = [
   { value: "auto", label: "Auto / U.S." },
   { value: "europe", label: "Europe" },
@@ -7,14 +9,12 @@ export const MARKET_OPTIONS = [
 
 export type Market = (typeof MARKET_OPTIONS)[number]["value"];
 
-const SECURITY_CODE = /^[A-Z0-9][A-Z0-9.-]{0,11}$/;
-
 export function normalizeSecurityCode(value: string): string {
   return value.trim().toUpperCase();
 }
 
 export function isValidSecurityCode(value: string): boolean {
-  return SECURITY_CODE.test(normalizeSecurityCode(value));
+  return isValidTicker(normalizeSecurityCode(value));
 }
 
 export function isMarket(value: unknown): value is Market {

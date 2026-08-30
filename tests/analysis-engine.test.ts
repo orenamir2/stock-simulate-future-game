@@ -207,10 +207,17 @@ test("keeps rejecting future source access times that bypass server stamping", (
   );
 });
 
-test("rejects homepage and private-network source URLs", () => {
+test("discards homepage sources and their citations while rejecting unsafe URLs", () => {
   const homepage = makeRawAnalysis();
-  homepage.sources[2].url = "https://regulator.example.org/";
-  assert.throws(() => processFixture(homepage), /not a homepage/);
+  homepage.sources[1].url = "https://investor.example.com/";
+  const recovered = processFixture(homepage);
+  assert.equal(recovered.sources.length, 7);
+  assert.ok(!recovered.sources.some(({ id }) => id === "s2"));
+  assert.deepEqual(recovered.baseline.sourceIds, ["s1"]);
+  assert.ok(recovered.scenarios.every(({ sourceIds }) => !sourceIds.includes("s2")));
+  assert.ok(recovered.research.every(({ sourceIds, questions }) =>
+    !sourceIds.includes("s2") && questions.every((question) => !question.sourceIds.includes("s2"))
+  ));
 
   const privateHost = makeRawAnalysis();
   privateHost.sources[2].url = "http://127.0.0.1/document";

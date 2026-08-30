@@ -11,6 +11,7 @@ import {
 } from "../lib/market-support";
 import { analysisReportFilename, createAnalysisReportPdf } from "../lib/pdf-report";
 import { researchFramework } from "../lib/research-framework";
+import { MAX_TICKER_LENGTH } from "../lib/ticker";
 
 const sampleScenarioInputs = [
   ["Category-defining AI device", 2, 360, "New hardware category creates a material replacement cycle."],
@@ -416,7 +417,7 @@ export default function Home() {
         <label htmlFor="ticker">Exchange symbol</label>
         <div className="inputRow">
           <div className="marketSelect"><label className="srOnly" htmlFor="market">Market</label><select id="market" value={market} onChange={(event) => setMarket(event.target.value as Market)}>{MARKET_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
-          <div className="tickerInput"><span className="searchIcon">⌕</span><input id="ticker" value={query} onChange={(event) => setQuery(event.target.value.toUpperCase())} maxLength={12} autoComplete="off" aria-describedby="tickerHint" /></div>
+          <div className="tickerInput"><span className="searchIcon">⌕</span><input id="ticker" value={query} onChange={(event) => setQuery(event.target.value.toUpperCase())} maxLength={MAX_TICKER_LENGTH} autoComplete="off" aria-describedby="tickerHint" /></div>
           <button type="submit" disabled={running}>{running ? "Researching…" : "Run analysis"}<span aria-hidden="true">→</span></button>
         </div>
         <span id="tickerHint">Examples: AAPL · SAP.DE · 005930 (South Korea) · TEVA (Israel). Include an exchange suffix when a European symbol is ambiguous.</span>
