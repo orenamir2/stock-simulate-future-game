@@ -8,6 +8,7 @@ import {
 } from "../../../lib/analysis-engine";
 import { saveAnalysisHistory } from "../../../lib/analysis-history";
 import { researchFrameworkPrompt } from "../../../lib/research-framework";
+import { isValidTicker } from "../../../lib/ticker";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_CODEX_TIMEOUT_MS = 3_600_000;
@@ -625,7 +626,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid JSON request" }, { status: 400 });
   }
   ticker = ticker?.trim().toUpperCase();
-  if (!ticker || !/^[A-Z.-]{1,8}$/.test(ticker)) {
+  if (!ticker || !isValidTicker(ticker)) {
     console.warn("Analysis request rejected", {
       requestId,
       phase: "parse-request",
