@@ -178,7 +178,13 @@ function makeSample(): Analysis {
       { id: "s8", title: "AAPL market reference", publisher: "Nasdaq", publishedAt: "2026-08-23", accessedAt: "2026-08-23T20:00:00Z", type: "market", url: "https://www.nasdaq.com/market-activity/stocks/aapl" },
     ],
   };
-  return { ...processAnalysis(raw, "AAPL"), live: false, engine: "illustrative" };
+  // Validate the illustrative snapshot as of its market-data timestamp so the
+  // homepage does not expire when production freshness checks advance in time.
+  return {
+    ...processAnalysis(raw, "AAPL", new Date(raw.priceAsOf)),
+    live: false,
+    engine: "illustrative",
+  };
 }
 
 const stages = [
