@@ -1,4 +1,4 @@
-FROM node:22.14.0-bookworm-slim AS build
+FROM node:26.8.1-bookworm-slim AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -7,7 +7,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:22.14.0-bookworm-slim AS runtime
+FROM node:26.8.1-bookworm-slim AS runtime
 
 ARG CODEX_VERSION=0.144.4
 
