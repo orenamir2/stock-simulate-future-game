@@ -15,16 +15,30 @@ import {
   type Market,
 } from "../../../lib/market-support";
 import { researchFrameworkPrompt } from "../../../lib/research-framework";
+import type { Analysis } from "../../../lib/analysis-types";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_CODEX_TIMEOUT_MS = 3_600_000;
-const CODEX_PROGRESS_INTERVAL_MS = 60_000;
+const CODEX_PROGRESS_INTERVAL_MS = 30_000;
 const RESPONSE_KEEPALIVE_INTERVAL_MS = 15_000;
+const MAX_RESEARCH_ATTEMPTS = 2;
 const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
 const ANALYSIS_STEP_COUNT = 8;
 let researchInProgress = false;
 
 type JsonRecord = Record<string, unknown>;
+type AnalysisStageStatus = "in_progress" | "completed" | "retrying" | "failed" | "cancelled";
+
+const ANALYSIS_STAGE_NAMES = [
+  "admission",
+  "prepare-agent",
+  "plan-research",
+  "retrieve-evidence",
+  "generate-analysis",
+  "parse-output",
+  "validate-and-calculate",
+  "persist-and-respond",
+] as const;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -37,15 +51,27 @@ function logAnalysisStep(
   phase: string,
   description: string,
   details: JsonRecord = {},
+  status: AnalysisStageStatus = "in_progress",
 ) {
-  console.info(`Analysis step ${step}/${ANALYSIS_STEP_COUNT}: ${description}`, {
+  const boundedStep = Math.max(1, Math.min(step, ANALYSIS_STEP_COUNT));
+  const message = `Analysis step ${boundedStep}/${ANALYSIS_STEP_COUNT} ${status}: ${description}`;
+  // Keep this event on one line so `kubectl logs -f` remains readable and can
+  // be filtered or parsed without joining Node's multi-line object rendering.
+  console.info(`[analysis-stage] ${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    message,
     requestId,
     ticker,
-    step,
+    step: boundedStep,
     totalSteps: ANALYSIS_STEP_COUNT,
+    stage: ANALYSIS_STAGE_NAMES[boundedStep - 1],
+    status,
     phase,
+    progressPct: status === "completed"
+      ? Math.round((boundedStep / ANALYSIS_STEP_COUNT) * 100)
+      : Math.round(((boundedStep - 1) / ANALYSIS_STEP_COUNT) * 100),
     ...details,
-  });
+  })}`);
 }
 
 function codexEventItem(event: JsonRecord): JsonRecord | null {
@@ -108,6 +134,30 @@ function summarizeAnalysisOutput(value: unknown) {
     return { outputType: Array.isArray(value) ? "array" : typeof value };
   }
   const analysis = value as Record<string, unknown>;
+  const questions = Array.isArray(analysis.research)
+    ? analysis.research.flatMap((finding) =>
+      isRecord(finding) && Array.isArray(finding.questions) ? finding.questions : []
+    )
+    : [];
+  const researchStatuses = questions.reduce(
+    (counts, question) => {
+      if (!isRecord(question) || typeof question.status !== "string") {
+        counts.invalid += 1;
+      } else if (question.status === "answered") {
+        counts.answered += 1;
+        counts.coveragePoints += 1;
+      } else if (question.status === "partial") {
+        counts.partial += 1;
+        counts.coveragePoints += 0.5;
+      } else if (question.status === "unanswered") {
+        counts.unanswered += 1;
+      } else {
+        counts.invalid += 1;
+      }
+      return counts;
+    },
+    { answered: 0, partial: 0, unanswered: 0, invalid: 0, coveragePoints: 0 },
+  );
   return {
     outputType: "object",
     modelTicker: typeof analysis.ticker === "string" ? analysis.ticker : null,
@@ -118,10 +168,22 @@ function summarizeAnalysisOutput(value: unknown) {
     sourceCount: Array.isArray(analysis.sources) ? analysis.sources.length : null,
     scenarioCount: Array.isArray(analysis.scenarios) ? analysis.scenarios.length : null,
     researchCategoryCount: Array.isArray(analysis.research) ? analysis.research.length : null,
+    researchQuestionCount: questions.length,
+    researchStatuses,
   };
 }
 
-function runCodex(prompt: string, ticker: string, requestId: string, signal?: AbortSignal): Promise<string> {
+function isMinimumResearchCoverageError(error: unknown): error is AnalysisValidationError {
+  return error instanceof AnalysisValidationError && error.details.check === "minimum-research-coverage";
+}
+
+function runCodex(
+  prompt: string,
+  ticker: string,
+  requestId: string,
+  researchAttempt: number,
+  signal?: AbortSignal,
+): Promise<string> {
   const schemaPath =
     process.env.STOCK_ANALYSIS_SCHEMA_PATH ??
     resolve(process.cwd(), "config/stock-analysis.schema.json");
@@ -169,6 +231,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
     let webSearchCount = 0;
     let reasoningItemCount = 0;
     let eventCount = 0;
+    let latestWebSearchQuery: string | null = null;
 
     const updateProgress = (
       step: number,
@@ -178,12 +241,23 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
       forceLog = false,
     ) => {
       const changed = step !== currentStep || phase !== currentPhase;
+      if (changed) {
+        logAnalysisStep(requestId, ticker, currentStep, currentPhase, currentDescription, {
+          researchAttempt,
+          agentElapsedMs: Date.now() - startedAt,
+          eventCount,
+          webSearchCount,
+          reasoningItemCount,
+        }, "completed");
+      }
       currentStep = step;
       currentPhase = phase;
       currentDescription = description;
       if (changed || forceLog) {
         logAnalysisStep(requestId, ticker, step, phase, description, {
           elapsedMs: Date.now() - startedAt,
+          researchAttempt,
+          eventCount,
           webSearchCount,
           reasoningItemCount,
           ...details,
@@ -205,6 +279,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
       if (itemType === "web_search" || itemType === "web_search_call") {
         if (eventType === "item.completed") webSearchCount += 1;
         const query = codexSearchQuery(item);
+        if (query) latestWebSearchQuery = query;
         updateProgress(
           4,
           "retrieve-live-evidence",
@@ -263,8 +338,27 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
       clearTimeout(timer);
       clearInterval(progressTimer);
       signal?.removeEventListener("abort", abort);
-      if (error) reject(error);
-      else {
+      if (error) {
+        logAnalysisStep(requestId, ticker, currentStep, currentPhase, currentDescription, {
+          researchAttempt,
+          agentElapsedMs: Date.now() - startedAt,
+          eventCount,
+          webSearchCount,
+          reasoningItemCount,
+          latestWebSearchQuery,
+          errorName: error.name,
+          errorMessage: error.message,
+        }, error.name === "AbortError" ? "cancelled" : "failed");
+        reject(error);
+      } else {
+        logAnalysisStep(requestId, ticker, currentStep, currentPhase, currentDescription, {
+          researchAttempt,
+          agentElapsedMs: Date.now() - startedAt,
+          eventCount,
+          webSearchCount,
+          reasoningItemCount,
+          latestWebSearchQuery,
+        }, "completed");
         console.info("Codex research completed", {
           requestId,
           ticker,
@@ -304,15 +398,11 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
       finish(new CodexTimeoutError(timeoutMs));
     }, timeoutMs);
     const progressTimer = setInterval(() => {
-      console.info(`Analysis progress heartbeat — step ${currentStep}/${ANALYSIS_STEP_COUNT}: ${currentDescription}`, {
-        requestId,
-        ticker,
-        step: currentStep,
-        totalSteps: ANALYSIS_STEP_COUNT,
-        phase: currentPhase,
-        description: currentDescription,
+      logAnalysisStep(requestId, ticker, currentStep, currentPhase, currentDescription, {
+        heartbeat: true,
+        researchAttempt,
         pid: child.pid,
-        elapsedMs: Date.now() - startedAt,
+        agentElapsedMs: Date.now() - startedAt,
         stdoutBytes: Buffer.byteLength(stdout, "utf8"),
         stderrBytes: Buffer.byteLength(stderr, "utf8"),
         stdoutChunks,
@@ -320,6 +410,7 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
         eventCount,
         webSearchCount,
         reasoningItemCount,
+        latestWebSearchQuery,
         lastEventType,
         msSinceLastOutput: lastOutputAt === null ? null : Date.now() - lastOutputAt,
         stderrTail: stderr.trim().slice(-1_000) || null,
@@ -335,6 +426,13 @@ function runCodex(prompt: string, ticker: string, requestId: string, signal?: Ab
       reasoningEffort,
       webSearch: "live",
       schemaPath,
+    });
+    logAnalysisStep(requestId, ticker, currentStep, currentPhase, currentDescription, {
+      researchAttempt,
+      pid: child.pid,
+      timeoutMs,
+      reasoningEffort,
+      webSearch: "live",
     });
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -499,6 +597,7 @@ RESEARCH RULES
 - Locate the latest filing and earnings release plus enough prior filings to evaluate at least 10 quarters. Prefer filings, regulators, government data, company materials and competitor filings over summaries.
 - Triangulate management claims with independent customer, competitor, industry or government evidence. Never invent a metric; mark missing evidence with partial or unanswered status and explain the gap in answer.
 - Complete every category below exactly once and answer each of its four questions using questionIndex 0–3 exactly once. status is answered, partial or unanswered. An answered question must cite evidence. score means evidence direction (-2 strongly negative, -1 negative, 0 mixed/neutral, 1 positive, 2 strongly positive). The server derives evidence strength and unanswered-question coverage.
+- Before returning JSON, self-audit question coverage: answered is 1 point, partial is 0.5, and unanswered is 0. The 48 questions must total at least 12 points, supported by claim-level citations to exact non-homepage URLs. Continue researching if genuine evidence has not yet met that minimum; never raise a status or invent evidence merely to pass it.
 - Each finding and scenario must cite valid IDs from the source ledger. Every source-ledger URL must be unique: when the same document supports multiple claims, create it once and reuse its existing source ID. Use exact document or data-page URLs rather than search pages or generic homepages; if you cannot obtain an exact evidence URL, omit that source and mark the affected answer partial or unanswered. Before returning JSON, audit every source URL for this rule. publishedAt must be YYYY-MM-DD. accessedAt must be an ISO-8601 UTC timestamp no later than the request time above; the server replaces it with its authoritative completion timestamp. The server derives primary-source status from source type.
 
 ${researchFrameworkPrompt}
@@ -513,23 +612,67 @@ SCENARIO AND VALUATION RULES
     logAnalysisStep(requestId, ticker, 2, "prepare-codex", "assemble the research prompt and output schema", {
       requestStartedAt: requestStartedAt.toISOString(),
     });
-    const output = await runCodex(prompt, ticker, requestId, signal);
-    phase = "parse-codex-output";
-    logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times");
-    const raw = JSON.parse(output) as unknown;
-    const validationNow = new Date();
-    const stamped = stampSourceAccessTimes(raw, validationNow);
-    console.info("Analysis source access timestamps stamped", {
-      requestId,
-      ticker,
-      ...stamped.diagnostics,
-    });
-    phase = "validate-analysis";
-    logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
-      validationNow: validationNow.toISOString(),
-      ...summarizeAnalysisOutput(stamped.value),
-    });
-    const data = processAnalysis(stamped.value, ticker, validationNow);
+    let data: Analysis | undefined;
+    let validationNow = new Date();
+    let attemptPrompt = prompt;
+    for (let attempt = 1; attempt <= MAX_RESEARCH_ATTEMPTS; attempt += 1) {
+      const output = await runCodex(attemptPrompt, ticker, requestId, attempt, signal);
+      phase = "parse-codex-output";
+      logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times", {
+        researchAttempt: attempt,
+      });
+      const raw = JSON.parse(output) as unknown;
+      validationNow = new Date();
+      const stamped = stampSourceAccessTimes(raw, validationNow);
+      const outputSummary = summarizeAnalysisOutput(stamped.value);
+      console.info("Analysis source access timestamps stamped", {
+        requestId,
+        ticker,
+        researchAttempt: attempt,
+        ...stamped.diagnostics,
+      });
+      logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times", {
+        researchAttempt: attempt,
+        ...stamped.diagnostics,
+        ...outputSummary,
+      }, "completed");
+      phase = "validate-analysis";
+      logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
+        validationNow: validationNow.toISOString(),
+        researchAttempt: attempt,
+        ...outputSummary,
+      });
+      try {
+        data = processAnalysis(stamped.value, ticker, validationNow);
+        logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
+          validationNow: validationNow.toISOString(),
+          researchAttempt: attempt,
+          retainedSourceCount: data.sources.length,
+          retainedScenarioCount: data.scenarios.length,
+          confidence: data.confidence,
+          ...outputSummary,
+        }, "completed");
+        break;
+      } catch (error) {
+        if (!isMinimumResearchCoverageError(error) || attempt === MAX_RESEARCH_ATTEMPTS) throw error;
+        phase = "retry-insufficient-research";
+        console.warn("Retrying analysis after insufficient claim-level research coverage", {
+          requestId,
+          ticker,
+          researchAttempt: attempt,
+          validationDetails: error.details,
+          ...outputSummary,
+        });
+        logAnalysisStep(requestId, ticker, 2, phase, "rerun research after the evidence coverage audit failed", {
+          researchAttempt: attempt,
+          nextResearchAttempt: attempt + 1,
+          validationDetails: error.details,
+          ...outputSummary,
+        }, "retrying");
+        attemptPrompt = `${prompt}\n\nRETRY CORRECTION\nThe previous attempt failed the server's minimum research-coverage audit with ${String(error.details.researchCoverage)} of 48 points. Start the research again. Use exact, non-homepage evidence URLs and attach valid source IDs to each question they support. Ensure genuinely supported answered and partial questions total at least 12 points before returning JSON.`;
+      }
+    }
+    if (!data) throw new Error("Research attempts completed without a validated analysis");
     phase = "store-analysis";
     logAnalysisStep(requestId, ticker, 8, phase, "persist the completed analysis and prepare the API response");
     let history;
@@ -544,6 +687,13 @@ SCENARIO AND VALUATION RULES
         ticker,
         errorMessage: historyError instanceof Error ? historyError.message : String(historyError),
       });
+      logAnalysisStep(requestId, ticker, 8, phase, "return the validated analysis without saved history", {
+        elapsedMs: Date.now() - requestStartedAt.getTime(),
+        sourceCount: data.sources.length,
+        scenarioCount: data.scenarios.length,
+        historySaved: false,
+        historyError: historyError instanceof Error ? historyError.message : String(historyError),
+      }, "completed");
       return Response.json({
         ...data,
         live: true,
@@ -560,10 +710,15 @@ SCENARIO AND VALUATION RULES
       confidence: data.confidence,
       expectedPrice: data.expectedPrice,
       historyId: history.id,
-    });
+    }, "completed");
     return Response.json({ ...data, live: true, engine: "codex-cli", history });
   } catch (error) {
     if (error instanceof AnalysisValidationError) {
+      logAnalysisStep(requestId, ticker, 7, phase, "analysis failed server validation", {
+        elapsedMs: Date.now() - requestStartedAt.getTime(),
+        errorMessage: error.message,
+        validationDetails: error.details,
+      }, "failed");
       console.warn("Analysis validation failed", {
         requestId,
         ticker,
@@ -572,9 +727,17 @@ SCENARIO AND VALUATION RULES
         errorMessage: error.message,
         validationDetails: error.details,
       });
+      if (isMinimumResearchCoverageError(error)) {
+        return Response.json({
+          error: `Research produced only ${String(error.details.researchCoverage)} of 48 claim-level coverage points after an automatic retry. The result was rejected rather than displaying unsupported analysis. Please retry.`,
+        }, { status: 422 });
+      }
       return Response.json({ error: error.message }, { status: 422 });
     }
     if (error instanceof Error && error.name === "AbortError") {
+      logAnalysisStep(requestId, ticker, 4, phase, "research was cancelled", {
+        elapsedMs: Date.now() - requestStartedAt.getTime(),
+      }, "cancelled");
       console.warn("Analysis request cancelled", {
         requestId,
         ticker,
@@ -584,6 +747,10 @@ SCENARIO AND VALUATION RULES
       return Response.json({ error: "Research cancelled" }, { status: 499 });
     }
     if (error instanceof CodexTimeoutError) {
+      logAnalysisStep(requestId, ticker, 4, phase, "research exceeded the configured timeout", {
+        elapsedMs: Date.now() - requestStartedAt.getTime(),
+        timeoutMs: error.timeoutMs,
+      }, "failed");
       console.error("Codex research timed out", {
         requestId,
         ticker,
@@ -598,6 +765,11 @@ SCENARIO AND VALUATION RULES
         { status: 504 },
       );
     }
+    logAnalysisStep(requestId, ticker, 4, phase, "research failed unexpectedly", {
+      elapsedMs: Date.now() - requestStartedAt.getTime(),
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      errorMessage: error instanceof Error ? error.message : String(error),
+    }, "failed");
     console.error("Codex research failed", {
       requestId,
       ticker,
@@ -665,6 +837,7 @@ export async function POST(request: Request) {
   researchInProgress = true;
   logAnalysisStep(requestId, ticker, 1, "admission", "accept and validate the ticker research request", {
     requestStartedAt: requestStartedAt.toISOString(),
-  });
+    market,
+  }, "completed");
   return streamAnalysisResponse(request, requestId, requestStartedAt, ticker, market);
 }

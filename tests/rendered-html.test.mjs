@@ -56,10 +56,13 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /codex/);
   assert.match(route, /--output-schema/);
   assert.match(route, /--json/);
-  assert.match(route, /Analysis step \$\{step\}\/\$\{ANALYSIS_STEP_COUNT\}/);
+  assert.match(route, /Analysis step \$\{boundedStep\}\/\$\{ANALYSIS_STEP_COUNT\}/);
   assert.match(route, /retrieve-live-evidence/);
   assert.match(route, /generate-structured-analysis/);
-  assert.match(route, /Analysis progress heartbeat/);
+  assert.match(route, /heartbeat: true/);
+  assert.match(route, /\[analysis-stage\]/);
+  assert.match(route, /latestWebSearchQuery/);
+  assert.match(route, /AnalysisStageStatus/);
   assert.doesNotMatch(route, /Codex research still running/);
   assert.match(route, /--sandbox/);
   assert.match(route, /read-only/);
@@ -67,6 +70,9 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /model_reasoning_effort/);
   assert.match(route, /CodexTimeoutError/);
   assert.match(route, /status: 504/);
+  assert.match(route, /MAX_RESEARCH_ATTEMPTS = 2/);
+  assert.match(route, /retry-insufficient-research/);
+  assert.match(route, /researchStatuses/);
   assert.match(route, /researchInProgress/);
   assert.match(route, /RESPONSE_KEEPALIVE_INTERVAL_MS/);
   assert.match(route, /X-Accel-Buffering/);
