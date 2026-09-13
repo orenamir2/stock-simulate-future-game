@@ -52,8 +52,78 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "thesis", "relativeLikelihood", "probabilityRationale", "valuationMethod", "factorStates", "valuationInputs", "keyDrivers", "sourceIds"],
+        "required": ["name", "thesis", "relativeLikelihood", "probabilityRationale", "valuationMethod", "factorStates", "valuationInputs", "keyDrivers", "sourceIds", "revenueBridge"],
         "properties": {
+          "revenueBridge": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "product",
+                "event",
+                "timing",
+                "leadingIndicator",
+                "baselineRevenue",
+                "volumeRatio",
+                "priceRatio",
+                "newAnnualRevenue",
+                "sourceIds"
+              ],
+              "properties": {
+                "product": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "event": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 1000
+                },
+                "timing": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "leadingIndicator": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                "baselineRevenue": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000.0
+                },
+                "volumeRatio": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "priceRatio": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "newAnnualRevenue": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000000000.0
+                },
+                "sourceIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 8,
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
           "name": { "type": "string", "minLength": 1, "maxLength": 160 },
           "thesis": { "type": "string", "minLength": 1, "maxLength": 2000 },
           "relativeLikelihood": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 },

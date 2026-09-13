@@ -498,6 +498,9 @@ export default function Home() {
             <span className="scenarioName"><i className={`dot ${scenario.type}`} />{scenario.name}<small>
               <span>{scenario.thesis}</span>
               <b>{scenario.valuationMethod}: {scenario.valuationMetricValue.toFixed(1)} {analysis.baseline.scale} × {scenario.valuationInputs.valuationMultiple.toFixed(1)} = {scenario.targetEquityValue.toFixed(1)} {analysis.baseline.scale} equity ÷ {scenario.targetDilutedShares.toFixed(2)} {analysis.baseline.scale} shares = {formatMoney(scenario.price, analysis.tradingCurrency)}</b>
+              {scenario.revenueBridge?.map((driver) => <em key={driver.product}>
+                {driver.product}: {driver.baselineRevenue.toFixed(1)} × {driver.volumeRatio.toFixed(2)} volume × {driver.priceRatio.toFixed(2)} price + {driver.newAnnualRevenue.toFixed(1)} new = {(driver.baselineRevenue * driver.volumeRatio * driver.priceRatio + driver.newAnnualRevenue).toFixed(1)} {analysis.baseline.scale} {analysis.reportingCurrency} annual revenue in year 3. {driver.event} Timing: {driver.timing}. Watch: {driver.leadingIndicator}. Sources {driver.sourceIds.map((id) => `[${id}]`).join(" ")}
+              </em>)}
               <em>Outcome bucket {formatMoney(scenario.priceRangeMin, analysis.tradingCurrency, 0)} to {upperRange} · {scenario.keyDrivers.join(" · ")}</em>
               <i>{scenario.probabilityRationale} Sources {scenario.sourceIds.map((id) => `[${id}]`).join(" ")}</i>
             </small></span>

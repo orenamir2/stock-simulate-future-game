@@ -254,3 +254,65 @@ test("rejects analyses that collapse to too few distinct scenarios", () => {
       && error.details.check === "minimum-distinct-scenarios",
   );
 });
+
+function productBridge() {
+  return [{
+    product: "Existing platform", baselineRevenue: 100, volumeRatio: 0.8, priceRatio: 0.9,
+    newAnnualRevenue: 15, event: "Renewal loss partially offset by new workload launch",
+    timing: "Launch in year 2", leadingIndicator: "Renewal retention and paid usage", sourceIds: ["s1"],
+  }];
+}
+
+test("product volume, pricing and new revenue drive valuation instead of aggregate CAGR", () => {
+  const raw = makeRawAnalysis();
+  raw.scenarios[0].revenueBridge = productBridge();
+  raw.scenarios[0].valuationInputs.revenueCagrPct = 200;
+  const scenario = processFixture(raw).scenarios.find(({ name }) => name === "Scenario 1")!;
+  assert.equal(scenario.forecastRevenue, 87);
+  assert.ok(Math.abs(scenario.price - 87 * 0.06 * 8 / 10) < 1e-10);
+});
+
+test("a pre-revenue product can commercialize from a zero company baseline", () => {
+  const raw = makeRawAnalysis();
+  raw.baseline.revenue = 0;
+  raw.scenarios.forEach((scenario, index) => {
+    scenario.revenueBridge = [{ ...productBridge()[0], baselineRevenue: 0, newAnnualRevenue: 10 + index }];
+  });
+  const result = processFixture(raw);
+  assert.equal(result.scenarios.length, 20);
+  assert.equal(result.scenarios.find(({ name }) => name === "Scenario 1")!.forecastRevenue, 10);
+});
+
+test("product baseline gaps, unknown evidence and negative ratios cannot enter valuation", () => {
+  for (const invalid of ["baseline", "source", "ratio", "duplicate"] as const) {
+    const raw = makeRawAnalysis();
+    raw.scenarios[0].revenueBridge = productBridge();
+    const driver = raw.scenarios[0].revenueBridge[0];
+    if (invalid === "baseline") driver.baselineRevenue = 60;
+    if (invalid === "source") driver.sourceIds = ["unknown"];
+    if (invalid === "ratio") driver.volumeRatio = -1;
+    if (invalid === "duplicate") raw.scenarios[0].revenueBridge.push({ ...driver });
+    const result = processFixture(raw);
+    assert.equal(result.scenarios.length, 19);
+    assert.ok(!result.scenarios.some(({ name }) => name === "Scenario 1"));
+  }
+});
+
+test("different product outcomes survive identical broad factor states", () => {
+  const raw = makeRawAnalysis();
+  raw.scenarios[0].revenueBridge = productBridge();
+  raw.scenarios[1].revenueBridge = [{ ...productBridge()[0], volumeRatio: 1.2 }];
+  raw.scenarios[1].factorStates = structuredClone(raw.scenarios[0].factorStates);
+  assert.equal(processFixture(raw).scenarios.length, 20);
+});
+
+test("product evidence follows duplicate source aliases and rejects discarded homepages", () => {
+  const raw = makeRawAnalysis();
+  raw.sources.push({ ...raw.sources[0], id: "alias" });
+  raw.scenarios[0].revenueBridge = [{ ...productBridge()[0], sourceIds: ["alias"] }];
+  assert.deepEqual(processFixture(raw).scenarios.find(({ name }) => name === "Scenario 1")!.revenueBridge![0].sourceIds, ["s1"]);
+  raw.sources.pop();
+  raw.sources[4].url = "https://industry.example.net/";
+  raw.scenarios[0].revenueBridge[0].sourceIds = ["s5"];
+  assert.equal(processFixture(raw).scenarios.length, 19);
+});

@@ -4,6 +4,7 @@ import type {
   BaselineFinancials,
   FactorStates,
   QuestionAnswer,
+  ProductRevenueDriver,
   RawAnalysis,
   RawResearchFinding,
   RawScenario,
@@ -237,6 +238,9 @@ function discardHomepageSources(raw: RawAnalysis): RawAnalysis {
     scenarios: raw.scenarios.map((scenario) => ({
       ...scenario,
       sourceIds: retainIds(scenario.sourceIds),
+      ...(scenario.revenueBridge ? { revenueBridge: scenario.revenueBridge.map((driver) => ({
+        ...driver, sourceIds: retainIds(driver.sourceIds),
+      })) } : {}),
     })),
     research: raw.research.map((finding) => ({
       ...finding,
@@ -344,13 +348,42 @@ function parseValuationInputs(value: unknown, label: string): ValuationInputs {
   };
 }
 
+function parseRevenueBridge(value: unknown, label: string): ProductRevenueDriver[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 12) {
+    fail(`${label} must contain between 1 and 12 products or segments`);
+  }
+  const products = new Set<string>();
+  return value.map((item, index) => {
+    const key = `${label}[${index}]`;
+    if (!isRecord(item)) fail(`${key} must be an object`);
+    assertKeys(item, ["product", "baselineRevenue", "volumeRatio", "priceRatio", "newAnnualRevenue", "event", "timing", "leadingIndicator", "sourceIds"], key);
+    const product = nonEmptyString(item.product, `${key}.product`, 160);
+    if (products.has(product.toLowerCase())) fail(`${label} has duplicate products`);
+    products.add(product.toLowerCase());
+    return {
+      product,
+      baselineRevenue: finiteNumber(item.baselineRevenue, `${key}.baselineRevenue`, 0, 1e9),
+      volumeRatio: finiteNumber(item.volumeRatio, `${key}.volumeRatio`, 0, 1000),
+      priceRatio: finiteNumber(item.priceRatio, `${key}.priceRatio`, 0, 1000),
+      newAnnualRevenue: finiteNumber(item.newAnnualRevenue, `${key}.newAnnualRevenue`, 0, 1e9),
+      event: nonEmptyString(item.event, `${key}.event`, 1000),
+      timing: nonEmptyString(item.timing, `${key}.timing`, 300),
+      leadingIndicator: nonEmptyString(item.leadingIndicator, `${key}.leadingIndicator`, 500),
+      sourceIds: stringArray(item.sourceIds, `${key}.sourceIds`, 1, 8),
+    };
+  });
+}
+
 function parseScenario(value: unknown, index: number): RawScenario {
   if (!isRecord(value)) fail(`scenarios[${index}] must be an object`);
   assertKeys(value, [
     "name", "thesis", "relativeLikelihood", "probabilityRationale", "valuationMethod",
-    "factorStates", "valuationInputs", "keyDrivers", "sourceIds",
+    "factorStates", "valuationInputs", "keyDrivers", "sourceIds", "revenueBridge",
   ], `scenarios[${index}]`);
   return {
+    ...(value.revenueBridge === undefined ? {} : {
+      revenueBridge: parseRevenueBridge(value.revenueBridge, `scenarios[${index}].revenueBridge`),
+    }),
     name: nonEmptyString(value.name, `scenarios[${index}].name`, 160),
     thesis: nonEmptyString(value.thesis, `scenarios[${index}].thesis`, 2_000),
     relativeLikelihood: finiteNumber(value.relativeLikelihood, `scenarios[${index}].relativeLikelihood`, EPSILON, 1_000),
@@ -539,6 +572,9 @@ function mergeDuplicateSources(raw: RawAnalysis): RawAnalysis {
     scenarios: raw.scenarios.map((scenario) => ({
       ...scenario,
       sourceIds: remapSourceIds(scenario.sourceIds, aliases),
+      ...(scenario.revenueBridge ? { revenueBridge: scenario.revenueBridge.map((driver) => ({
+        ...driver, sourceIds: remapSourceIds(driver.sourceIds, aliases),
+      })) } : {}),
     })),
     research: raw.research.map((finding) => ({
       ...finding,
@@ -718,7 +754,18 @@ function validateValuationPair(inputs: ValuationInputs, scenarioName: string) {
 function deriveScenario(raw: RawScenario, baseline: BaselineFinancials, currentPrice: number): Omit<Scenario, "probability" | "priceRangeMin" | "priceRangeMax"> {
   validateValuationPair(raw.valuationInputs, raw.name);
   const inputs = raw.valuationInputs;
-  const forecastRevenue = baseline.revenue * Math.pow(1 + inputs.revenueCagrPct / 100, 3);
+  let forecastRevenue = baseline.revenue * Math.pow(1 + inputs.revenueCagrPct / 100, 3);
+  if (raw.revenueBridge) {
+    const bridgeBaseline = raw.revenueBridge.reduce((sum, driver) => sum + driver.baselineRevenue, 0);
+    if (Math.abs(bridgeBaseline - baseline.revenue) > Math.max(1e-6, baseline.revenue * 0.001)) {
+      fail(`${raw.name} product baseline revenue must reconcile to company revenue within 0.1%`);
+    }
+    forecastRevenue = raw.revenueBridge.reduce((sum, driver) =>
+      sum + driver.baselineRevenue * driver.volumeRatio * driver.priceRatio + driver.newAnnualRevenue, 0);
+    if (!Number.isFinite(forecastRevenue) || forecastRevenue > 1e9) {
+      fail(`${raw.name} product forecast revenue is out of range`);
+    }
+  }
   const valueMetric = metricValue(inputs, forecastRevenue);
   if (valueMetric < 0) fail(`${raw.name} produces a negative valuation metric`);
 
@@ -786,6 +833,13 @@ function mergeScenarioPair(existing: RawScenario, incoming: RawScenario): RawSce
   };
 }
 
+function operatingSignature(scenario: RawScenario): string {
+  return JSON.stringify((scenario.revenueBridge ?? []).map((driver) => ({
+    product: driver.product.toLowerCase(), baselineRevenue: driver.baselineRevenue,
+    volumeRatio: driver.volumeRatio, priceRatio: driver.priceRatio, newAnnualRevenue: driver.newAnnualRevenue,
+  })).sort((a, b) => a.product.localeCompare(b.product)));
+}
+
 function mergeDuplicateScenarios(scenarios: RawScenario[]): { scenarios: RawScenario[]; mergedCount: number } {
   const retained: RawScenario[] = [];
   const merges: Array<{ retained: string; merged: string; reason: "name" | "factor-states" }> = [];
@@ -793,7 +847,7 @@ function mergeDuplicateScenarios(scenarios: RawScenario[]): { scenarios: RawScen
     const vector = JSON.stringify(scenario.factorStates);
     const duplicateIndex = retained.findIndex((candidate) =>
       candidate.name.toLowerCase() === scenario.name.toLowerCase() ||
-      JSON.stringify(candidate.factorStates) === vector
+      (JSON.stringify(candidate.factorStates) === vector && operatingSignature(candidate) === operatingSignature(scenario))
     );
     if (duplicateIndex < 0) {
       retained.push(scenario);
@@ -986,6 +1040,10 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   const referenceValidScenarios = raw.scenarios.filter((scenario) => {
     try {
       auditReferences(scenario.sourceIds, sourceIds, scenario.name);
+      for (const driver of scenario.revenueBridge ?? []) {
+        auditReferences(driver.sourceIds, sourceIds, `${scenario.name}: ${driver.product}`);
+        if (driver.sourceIds.length === 0) fail(`${scenario.name} product driver requires evidence`);
+      }
       if (!scenario.sourceIds.some((id) => sourceMap.get(id)?.primary)) {
         fail(`${scenario.name} requires at least one primary source`);
       }
