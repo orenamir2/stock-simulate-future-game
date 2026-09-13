@@ -70,7 +70,21 @@ export type ValuationInputs = {
   cumulativeDividendsPerShare: number;
 };
 
+export type ProductRevenueDriver = {
+  product: string;
+  baselineRevenue: number;
+  volumeRatio: number;
+  priceRatio: number;
+  newAnnualRevenue: number;
+  event: string;
+  timing: string;
+  leadingIndicator: string;
+  sourceIds: string[];
+};
+
 export type RawScenario = {
+  // Optional only for compatibility with older saved analyses.
+  revenueBridge?: ProductRevenueDriver[];
   name: string;
   thesis: string;
   relativeLikelihood: number;

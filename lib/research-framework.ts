@@ -21,10 +21,10 @@ export const researchFramework: readonly ResearchCategory[] = [
     id: "product-customers",
     label: "Product & customers",
     questions: [
-      "What customer problem is solved, and how mission-critical is the product?",
-      "Are adoption, retention, churn, usage, backlog and customer concentration improving?",
+      "Which named products solve which customer problems, and what disclosed revenue or segment exposure does each represent?",
+      "For the material products, how do adoption, retention, churn, usage, backlog conversion and named customer exposures change volume and realized pricing?",
       "What do customers say about quality, value, switching and alternatives?",
-      "Is the roadmap creating a replacement cycle, cross-sell or a new market?",
+      "Which product launches, approvals, renewals or replacements fall within three years; what gates, adoption delays and cannibalization constrain their revenue?",
     ],
     preferredSources: ["product disclosures", "customer reviews", "channel checks", "usage data"],
   },
@@ -111,7 +111,7 @@ export const researchFramework: readonly ResearchCategory[] = [
     questions: [
       "What operational, legal, regulatory, cyber, safety and accounting risks can impair value?",
       "Which exposures are concentrated by supplier, customer, product or geography?",
-      "What is the probability, financial severity and leading indicator for each major risk?",
+      "For each material product-specific risk, what are the event window, exposed revenue/cost, conditional likelihood evidence and falsifying leading indicator?",
       "Which risks are correlated and should appear together in a scenario?",
     ],
     preferredSources: ["risk factors", "regulators", "court records", "security and recall notices"],
