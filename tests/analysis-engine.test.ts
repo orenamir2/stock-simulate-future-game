@@ -52,29 +52,99 @@ test("rejects model-supplied calculated fields", () => {
   );
 });
 
-test("merges duplicate scenario factor vectors and transfers their likelihood", () => {
+test("keeps different product event paths distinct under the same macro factor states", () => {
   const raw = makeRawAnalysis();
-  const combinedLikelihood = raw.scenarios[0].relativeLikelihood + raw.scenarios[1].relativeLikelihood;
   raw.scenarios[1].factorStates = structuredClone(raw.scenarios[0].factorStates);
   const result = processFixture(raw);
-  assert.equal(result.scenarios.length, 19);
+  assert.equal(result.scenarios.length, 20);
   assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
-  assert.equal(result.scenarios.find(({ name }) => name === "Scenario 2")?.relativeLikelihood, combinedLikelihood);
-  assert.ok(result.confidence < processFixture().confidence);
-  assert.match(result.probabilityMethod, /1 invalid or overlapping scenario consolidated/);
+  assert.ok(result.scenarios.some(({ name }) => name === "Scenario 1"));
+  assert.ok(result.scenarios.some(({ name }) => name === "Scenario 2"));
 });
 
-test("merges overlapping terminal prices instead of rejecting the analysis", () => {
+test("derives joint path weights from conditional event assumptions", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[0].conditionalLikelihoods[0].likelihood = 0.9;
+  raw.companyEvents[0].conditionalLikelihoods[1].likelihood = 0.1;
+  const result = processFixture(raw);
+  const paths = result.scenarios.flatMap(({ constituentPaths }) => constituentPaths);
+  const mean = (stateId: string) => {
+    const matching = paths.filter(({ eventPath }) => eventPath[0].stateId === stateId);
+    return matching.reduce((sum, path) => sum + path.probability, 0) / matching.length;
+  };
+  assert.ok(mean("occurs") > mean("absent"));
+  assert.equal(result.eventModelMetadata.inputProbabilityKind, "elicited-conditional-assumptions");
+  assert.equal(result.eventModelMetadata.outputProbabilityKind, "evidence-calibrated-path-probabilities");
+});
+
+test("aggregates identical prices after valuation while preserving paths, probability and dividends", () => {
   const raw = makeRawAnalysis();
   raw.scenarios[1].valuationInputs = structuredClone(raw.scenarios[0].valuationInputs);
+  raw.scenarios[1].valuationInputs.cumulativeDividendsPerShare = 9;
   const result = processFixture(raw);
   assert.equal(result.scenarios.length, 19);
   assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
-  const ascending = [...result.scenarios].sort((a, b) => a.price - b.price);
-  for (let index = 1; index < ascending.length; index += 1) {
-    assert.ok(ascending[index].price - ascending[index - 1].price >= 0.01);
+  const bucket = result.scenarios.find(({ constituentPaths }) => constituentPaths.length === 2);
+  assert.ok(bucket);
+  assert.deepEqual(bucket.constituentPaths.map(({ name }) => name).sort(), ["Scenario 1", "Scenario 2"]);
+  assert.equal(
+    bucket.probability,
+    bucket.constituentPaths.reduce((sum, path) => sum + path.probability, 0),
+  );
+  const expectedWealth = bucket.constituentPaths.reduce(
+    (sum, path) => sum + path.probability * path.terminalWealth,
+    0,
+  ) / bucket.probability;
+  assert.ok(Math.abs(expectedWealth / raw.currentPrice * 100 - 100 - bucket.totalReturnPct) < 1e-9);
+  assert.deepEqual(
+    bucket.constituentPaths.map(({ cumulativeDividendsPerShare }) => cumulativeDividendsPerShare).sort(),
+    [1, 9],
+  );
+});
+
+test("requires regulatory approval to occur before commercial sales", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[3].name = "Regulatory approval";
+  raw.companyEvents[4].name = "Commercial sales";
+  raw.companyEvents[4].prerequisiteIds = [raw.companyEvents[3].id];
+  for (let index = 16; index < 20; index += 1) {
+    raw.scenarios[index].eventPath[3].stateId = "occurs";
   }
-  assert.ok(result.confidence < processFixture().confidence);
+  assert.doesNotThrow(() => processFixture(structuredClone(raw)));
+  raw.scenarios[16].eventPath[4].occursOn = "2026-03-01";
+  assert.throws(() => processFixture(raw), /before required event/);
+});
+
+test("rejects incompatible export prohibition and unrestricted-sales states", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[0].states[0].label = "Export prohibited";
+  raw.companyEvents[0].states[0].incompatibleStateIds = ["event-2:occurs"];
+  raw.companyEvents[1].states[0].label = "Unrestricted affected-market sales";
+  assert.throws(() => processFixture(raw), /combines incompatible states/);
+});
+
+test("deduplicates overlapping revenue exposure across joint disruptions", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[0].states[0].revenueImpacts = [{ exposureId: "product-a", impactPct: -5 }];
+  raw.companyEvents[1].states[0].revenueImpacts = [{ exposureId: "product-a", impactPct: -12 }];
+  raw.companyEvents[2].states[0].revenueImpacts = [{ exposureId: "product-a", impactPct: -8 }];
+  const result = processFixture(raw);
+  const path = result.scenarios.flatMap(({ constituentPaths }) => constituentPaths)
+    .find(({ name }) => name === "Scenario 8");
+  assert.deepEqual(path?.revenueImpacts, [{ exposureId: "product-a", impactPct: -12 }]);
+  const scenario = result.scenarios.find(({ constituentPaths }) =>
+    constituentPaths.some(({ name }) => name === "Scenario 8")
+  );
+  const inputs = raw.scenarios[7].valuationInputs;
+  const expectedRevenue = raw.baseline.revenue * Math.pow(1 + inputs.revenueCagrPct / 100, 3) * 0.88;
+  assert.ok(scenario && Math.abs(scenario.forecastRevenue - expectedRevenue) < 1e-9);
+});
+
+test("rejects cyclic company-event prerequisites", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[0].prerequisiteIds = [raw.companyEvents[1].id];
+  raw.companyEvents[1].prerequisiteIds = [raw.companyEvents[0].id];
+  assert.throws(() => processFixture(raw), /prerequisites contain a cycle/);
 });
 
 test("drops malformed and scenario-level invalid entries while retaining an analysis", () => {
@@ -86,7 +156,7 @@ test("drops malformed and scenario-level invalid entries while retaining an anal
   const result = processFixture(raw);
   assert.equal(result.scenarios.length, 17);
   assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
-  assert.match(result.probabilityMethod, /3 invalid or overlapping scenarios consolidated/);
+  assert.match(result.probabilityMethod, /3 invalid scenarios removed/);
 });
 
 test("drops unsupported valuation formulas", () => {
@@ -243,14 +313,11 @@ test("rejects analyses with effectively empty research", () => {
   );
 });
 
-test("rejects analyses that collapse to too few distinct scenarios", () => {
+test("rejects duplicate joint event paths", () => {
   const raw = makeRawAnalysis();
-  for (let index = 1; index < raw.scenarios.length; index += 1) {
-    raw.scenarios[index].valuationInputs = structuredClone(raw.scenarios[0].valuationInputs);
-  }
+  raw.scenarios[1].eventPath = structuredClone(raw.scenarios[0].eventPath);
   assert.throws(
     () => processFixture(raw),
-    (error) => error instanceof AnalysisValidationError
-      && error.details.check === "minimum-distinct-scenarios",
+    /duplicates an existing company event path/,
   );
 });

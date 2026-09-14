@@ -2,6 +2,11 @@ import { researchFramework } from "./research-framework.ts";
 import type {
   Analysis,
   BaselineFinancials,
+  CompanyEvent,
+  CompanyEventState,
+  ConditionalLikelihood,
+  EventModelMetadata,
+  EventPathSelection,
   FactorStates,
   QuestionAnswer,
   RawAnalysis,
@@ -234,6 +239,14 @@ function discardHomepageSources(raw: RawAnalysis): RawAnalysis {
   return {
     ...raw,
     baseline: { ...raw.baseline, sourceIds: retainIds(raw.baseline.sourceIds) },
+    companyEvents: raw.companyEvents.map((event) => ({
+      ...event,
+      evidenceSourceIds: retainIds(event.evidenceSourceIds),
+      conditionalLikelihoods: event.conditionalLikelihoods.map((likelihood) => ({
+        ...likelihood,
+        evidenceSourceIds: retainIds(likelihood.evidenceSourceIds),
+      })),
+    })),
     scenarios: raw.scenarios.map((scenario) => ({
       ...scenario,
       sourceIds: retainIds(scenario.sourceIds),
@@ -300,6 +313,112 @@ function parseFactorStates(value: unknown, label: string): FactorStates {
   };
 }
 
+function parseStateRefs(value: unknown, label: string): `${string}:${string}`[] {
+  const refs = stringArray(value, label, 0, 40);
+  for (const ref of refs) {
+    if (!/^[^:]+:[^:]+$/.test(ref)) fail(`${label} must contain eventId:stateId references`);
+  }
+  return refs as `${string}:${string}`[];
+}
+
+function parseCompanyEventState(value: unknown, label: string): CompanyEventState {
+  if (!isRecord(value)) fail(`${label} must be an object`);
+  assertKeys(value, [
+    "id", "label", "outcome", "prerequisiteStateIds", "incompatibleStateIds", "revenueImpacts",
+  ], label);
+  if (!Array.isArray(value.revenueImpacts)) fail(`${label}.revenueImpacts must be an array`);
+  return {
+    id: nonEmptyString(value.id, `${label}.id`, 80),
+    label: nonEmptyString(value.label, `${label}.label`, 200),
+    outcome: enumValue(value.outcome, `${label}.outcome`, ["occurs", "does-not-occur"]),
+    prerequisiteStateIds: parseStateRefs(value.prerequisiteStateIds, `${label}.prerequisiteStateIds`),
+    incompatibleStateIds: parseStateRefs(value.incompatibleStateIds, `${label}.incompatibleStateIds`),
+    revenueImpacts: value.revenueImpacts.map((impact, index) => {
+      const impactLabel = `${label}.revenueImpacts[${index}]`;
+      if (!isRecord(impact)) fail(`${impactLabel} must be an object`);
+      assertKeys(impact, ["exposureId", "impactPct"], impactLabel);
+      return {
+        exposureId: nonEmptyString(impact.exposureId, `${impactLabel}.exposureId`, 100),
+        impactPct: finiteNumber(impact.impactPct, `${impactLabel}.impactPct`, -100, 300),
+      };
+    }),
+  };
+}
+
+function parseConditionalLikelihood(value: unknown, label: string): ConditionalLikelihood {
+  if (!isRecord(value)) fail(`${label} must be an object`);
+  assertKeys(value, [
+    "stateId", "givenStateIds", "likelihood", "basis", "evidenceSourceIds", "unknowns",
+  ], label);
+  return {
+    stateId: nonEmptyString(value.stateId, `${label}.stateId`, 80),
+    givenStateIds: parseStateRefs(value.givenStateIds, `${label}.givenStateIds`),
+    likelihood: finiteNumber(value.likelihood, `${label}.likelihood`, 0, 1),
+    basis: enumValue(value.basis, `${label}.basis`, ["elicited-assumption", "calibrated-probability"]),
+    evidenceSourceIds: stringArray(value.evidenceSourceIds, `${label}.evidenceSourceIds`, 0, 8),
+    unknowns: stringArray(value.unknowns, `${label}.unknowns`, 0, 12),
+  };
+}
+
+function parseCompanyEvent(value: unknown, index: number): CompanyEvent {
+  const label = `companyEvents[${index}]`;
+  if (!isRecord(value)) fail(`${label} must be an object`);
+  assertKeys(value, [
+    "id", "name", "dateWindow", "prerequisiteIds", "states", "conditionalLikelihoods",
+    "evidenceSourceIds", "unknowns",
+  ], label);
+  if (!isRecord(value.dateWindow)) fail(`${label}.dateWindow must be an object`);
+  assertKeys(value.dateWindow, ["earliest", "latest"], `${label}.dateWindow`);
+  if (!Array.isArray(value.states) || value.states.length < 2) fail(`${label}.states must contain at least two states`);
+  if (!Array.isArray(value.conditionalLikelihoods) || value.conditionalLikelihoods.length < 2) {
+    fail(`${label}.conditionalLikelihoods must contain at least two assumptions`);
+  }
+  const earliest = parseDate(value.dateWindow.earliest, `${label}.dateWindow.earliest`);
+  const latest = parseDate(value.dateWindow.latest, `${label}.dateWindow.latest`);
+  if (earliest > latest) fail(`${label}.dateWindow must be chronological`);
+  return {
+    id: nonEmptyString(value.id, `${label}.id`, 80),
+    name: nonEmptyString(value.name, `${label}.name`, 200),
+    dateWindow: { earliest, latest },
+    prerequisiteIds: stringArray(value.prerequisiteIds, `${label}.prerequisiteIds`, 0, 20),
+    states: value.states.map((state, stateIndex) => parseCompanyEventState(state, `${label}.states[${stateIndex}]`)),
+    conditionalLikelihoods: value.conditionalLikelihoods.map((item, likelihoodIndex) =>
+      parseConditionalLikelihood(item, `${label}.conditionalLikelihoods[${likelihoodIndex}]`)
+    ),
+    evidenceSourceIds: stringArray(value.evidenceSourceIds, `${label}.evidenceSourceIds`, 1, 8),
+    unknowns: stringArray(value.unknowns, `${label}.unknowns`, 0, 12),
+  };
+}
+
+function parseEventModelMetadata(value: unknown): EventModelMetadata {
+  if (!isRecord(value)) fail("eventModelMetadata must be an object");
+  assertKeys(value, ["pathGeneration", "inputProbabilityKind", "outputProbabilityKind", "calibrationMethod"], "eventModelMetadata");
+  return {
+    pathGeneration: enumValue(value.pathGeneration, "eventModelMetadata.pathGeneration", ["enumerated", "sampled"]),
+    inputProbabilityKind: enumValue(value.inputProbabilityKind, "eventModelMetadata.inputProbabilityKind", [
+      "elicited-conditional-assumptions",
+    ]),
+    outputProbabilityKind: enumValue(value.outputProbabilityKind, "eventModelMetadata.outputProbabilityKind", [
+      "evidence-calibrated-path-probabilities",
+    ]),
+    calibrationMethod: nonEmptyString(value.calibrationMethod, "eventModelMetadata.calibrationMethod", 1_000),
+  };
+}
+
+function parseEventPath(value: unknown, label: string): EventPathSelection[] {
+  if (!Array.isArray(value) || value.length === 0) fail(`${label} must be a non-empty array`);
+  return value.map((selection, index) => {
+    const selectionLabel = `${label}[${index}]`;
+    if (!isRecord(selection)) fail(`${selectionLabel} must be an object`);
+    assertKeys(selection, ["eventId", "stateId", "occursOn"], selectionLabel);
+    return {
+      eventId: nonEmptyString(selection.eventId, `${selectionLabel}.eventId`, 80),
+      stateId: nonEmptyString(selection.stateId, `${selectionLabel}.stateId`, 80),
+      occursOn: parseDate(selection.occursOn, `${selectionLabel}.occursOn`),
+    };
+  });
+}
+
 function parseValuationInputs(value: unknown, label: string): ValuationInputs {
   if (!isRecord(value)) fail(`${label} must be an object`);
   assertKeys(value, [
@@ -348,7 +467,7 @@ function parseScenario(value: unknown, index: number): RawScenario {
   if (!isRecord(value)) fail(`scenarios[${index}] must be an object`);
   assertKeys(value, [
     "name", "thesis", "relativeLikelihood", "probabilityRationale", "valuationMethod",
-    "factorStates", "valuationInputs", "keyDrivers", "sourceIds",
+    "factorStates", "eventPath", "valuationInputs", "keyDrivers", "sourceIds",
   ], `scenarios[${index}]`);
   return {
     name: nonEmptyString(value.name, `scenarios[${index}].name`, 160),
@@ -361,6 +480,7 @@ function parseScenario(value: unknown, index: number): RawScenario {
     ),
     valuationMethod: nonEmptyString(value.valuationMethod, `scenarios[${index}].valuationMethod`, 300),
     factorStates: parseFactorStates(value.factorStates, `scenarios[${index}].factorStates`),
+    eventPath: parseEventPath(value.eventPath, `scenarios[${index}].eventPath`),
     valuationInputs: parseValuationInputs(value.valuationInputs, `scenarios[${index}].valuationInputs`),
     keyDrivers: stringArray(value.keyDrivers, `scenarios[${index}].keyDrivers`, 2, 5),
     sourceIds: stringArray(value.sourceIds, `scenarios[${index}].sourceIds`, 1, 8),
@@ -410,7 +530,7 @@ function parseRawAnalysis(value: unknown): RawAnalysis {
     "instrumentIdType", "tradingCurrency", "reportingCurrency", "currentPrice", "priceAsOf",
     "fiscalDataAsOf", "adrRatio", "currentReportingToTradingFxRate", "fxRateAsOf",
     "marketDataSourceId", "latestFilingSourceId", "fxSourceId", "summary", "baseline",
-    "scenarios", "signals", "research", "sources",
+    "eventModelMetadata", "companyEvents", "scenarios", "signals", "research", "sources",
   ], "analysis");
   if (!Array.isArray(value.sources) || value.sources.length < 8 || value.sources.length > 40) {
     fail("sources must contain between 8 and 40 items");
@@ -420,6 +540,9 @@ function parseRawAnalysis(value: unknown): RawAnalysis {
   }
   if (!Array.isArray(value.scenarios) || value.scenarios.length !== 20) {
     fail("scenarios must contain exactly 20 items");
+  }
+  if (!Array.isArray(value.companyEvents) || value.companyEvents.length === 0 || value.companyEvents.length > 20) {
+    fail("companyEvents must contain between 1 and 20 items");
   }
   if (!Array.isArray(value.signals) || value.signals.length !== 4) {
     fail("signals must contain exactly four items");
@@ -462,6 +585,8 @@ function parseRawAnalysis(value: unknown): RawAnalysis {
     fxSourceId: nonEmptyString(value.fxSourceId, "fxSourceId", 40),
     summary: nonEmptyString(value.summary, "summary", 3_000),
     baseline: parseBaseline(value.baseline),
+    eventModelMetadata: parseEventModelMetadata(value.eventModelMetadata),
+    companyEvents: value.companyEvents.map(parseCompanyEvent),
     scenarios: parseScenarios(value.scenarios),
     signals: value.signals.map((signal, index) => {
       if (!isRecord(signal)) fail(`signals[${index}] must be an object`);
@@ -536,6 +661,14 @@ function mergeDuplicateSources(raw: RawAnalysis): RawAnalysis {
       ...raw.baseline,
       sourceIds: remapSourceIds(raw.baseline.sourceIds, aliases),
     },
+    companyEvents: raw.companyEvents.map((event) => ({
+      ...event,
+      evidenceSourceIds: remapSourceIds(event.evidenceSourceIds, aliases),
+      conditionalLikelihoods: event.conditionalLikelihoods.map((likelihood) => ({
+        ...likelihood,
+        evidenceSourceIds: remapSourceIds(likelihood.evidenceSourceIds, aliases),
+      })),
+    })),
     scenarios: raw.scenarios.map((scenario) => ({
       ...scenario,
       sourceIds: remapSourceIds(scenario.sourceIds, aliases),
@@ -715,10 +848,17 @@ function validateValuationPair(inputs: ValuationInputs, scenarioName: string) {
   }
 }
 
-function deriveScenario(raw: RawScenario, baseline: BaselineFinancials, currentPrice: number): Omit<Scenario, "probability" | "priceRangeMin" | "priceRangeMax"> {
+function deriveScenario(
+  raw: RawScenario,
+  baseline: BaselineFinancials,
+  currentPrice: number,
+  eventRevenueImpactPct = 0,
+): Omit<Scenario, "probability" | "priceRangeMin" | "priceRangeMax" | "constituentPaths"> {
   validateValuationPair(raw.valuationInputs, raw.name);
   const inputs = raw.valuationInputs;
-  const forecastRevenue = baseline.revenue * Math.pow(1 + inputs.revenueCagrPct / 100, 3);
+  const forecastRevenue = baseline.revenue
+    * Math.pow(1 + inputs.revenueCagrPct / 100, 3)
+    * (1 + eventRevenueImpactPct / 100);
   const valueMetric = metricValue(inputs, forecastRevenue);
   if (valueMetric < 0) fail(`${raw.name} produces a negative valuation metric`);
 
@@ -773,7 +913,172 @@ function normalizeProbabilities(scenarios: RawScenario[], confidence: number): n
   for (let index = 0; index < remaining; index += 1) tenths[order[index].index] += 1;
   remaining = 1_000 - tenths.reduce((sum, value) => sum + value, 0);
   if (remaining !== 0) fail("Probability normalization failed");
-  return tenths.map((value) => value / 10);
+  const normalized = tenths.map((value) => value / 10);
+  normalized[normalized.length - 1] = 100 - normalized.slice(0, -1).reduce((sum, value) => sum + value, 0);
+  return normalized;
+}
+
+type ResolvedEventPath = {
+  revenueImpacts: Array<{ exposureId: string; impactPct: number }>;
+  revenueImpactPct: number;
+  jointLikelihood: number;
+};
+
+function validateEventModel(
+  events: CompanyEvent[],
+  scenarios: RawScenario[],
+  sourceIds: Set<string>,
+): Map<RawScenario, ResolvedEventPath> {
+  const eventMap = new Map<string, CompanyEvent>();
+  const stateMap = new Map<string, CompanyEventState>();
+  for (const event of events) {
+    if (eventMap.has(event.id)) fail(`Duplicate company event ID ${event.id}`);
+    eventMap.set(event.id, event);
+    auditReferences(event.evidenceSourceIds, sourceIds, `event ${event.id}`);
+    const localStateIds = new Set<string>();
+    for (const state of event.states) {
+      if (localStateIds.has(state.id)) fail(`Duplicate state ID ${event.id}:${state.id}`);
+      localStateIds.add(state.id);
+      stateMap.set(`${event.id}:${state.id}`, state);
+    }
+    for (const likelihood of event.conditionalLikelihoods) {
+      if (!localStateIds.has(likelihood.stateId)) {
+        fail(`Conditional likelihood references unknown state ${event.id}:${likelihood.stateId}`);
+      }
+      auditReferences(likelihood.evidenceSourceIds, sourceIds, `conditional likelihood ${event.id}:${likelihood.stateId}`);
+      if (likelihood.basis === "calibrated-probability" && likelihood.evidenceSourceIds.length === 0) {
+        fail(`Calibrated probability ${event.id}:${likelihood.stateId} requires evidence`);
+      }
+    }
+    const likelihoodStateIds = new Set(event.conditionalLikelihoods.map(({ stateId }) => stateId));
+    if ([...localStateIds].some((stateId) => !likelihoodStateIds.has(stateId))) {
+      fail(`Event ${event.id} must provide at least one unconditional or conditional likelihood per state`);
+    }
+    const likelihoodGroups = new Map<string, ConditionalLikelihood[]>();
+    for (const likelihood of event.conditionalLikelihoods) {
+      const key = [...likelihood.givenStateIds].sort().join("|");
+      likelihoodGroups.set(key, [...(likelihoodGroups.get(key) ?? []), likelihood]);
+    }
+    for (const [condition, group] of likelihoodGroups) {
+      const stateIds = new Set(group.map(({ stateId }) => stateId));
+      if (stateIds.size !== event.states.length || group.length !== event.states.length) {
+        fail(`Event ${event.id} conditional set '${condition || "unconditional"}' must cover every state exactly once`);
+      }
+      const total = group.reduce((sum, likelihood) => sum + likelihood.likelihood, 0);
+      if (Math.abs(total - 1) > 1e-6) {
+        fail(`Event ${event.id} conditional set '${condition || "unconditional"}' must sum to 1`);
+      }
+    }
+  }
+
+  const dependencyIds = new Map<string, Set<string>>();
+  for (const event of events) {
+    const dependencies = new Set(event.prerequisiteIds);
+    for (const prerequisiteId of event.prerequisiteIds) {
+      if (!eventMap.has(prerequisiteId)) fail(`Event ${event.id} has unknown prerequisite ${prerequisiteId}`);
+      if (prerequisiteId === event.id) fail(`Event ${event.id} cannot require itself`);
+    }
+    for (const state of event.states) {
+      for (const ref of [...state.prerequisiteStateIds, ...state.incompatibleStateIds]) {
+        if (!stateMap.has(ref)) fail(`State ${event.id}:${state.id} references unknown state ${ref}`);
+      }
+      for (const ref of state.prerequisiteStateIds) dependencies.add(ref.slice(0, ref.indexOf(":")));
+    }
+    for (const likelihood of event.conditionalLikelihoods) {
+      for (const ref of likelihood.givenStateIds) {
+        if (!stateMap.has(ref)) fail(`Conditional likelihood ${event.id}:${likelihood.stateId} references unknown state ${ref}`);
+        dependencies.add(ref.slice(0, ref.indexOf(":")));
+      }
+    }
+    if (dependencies.has(event.id)) fail(`Event ${event.id} cannot depend on itself`);
+    dependencyIds.set(event.id, dependencies);
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (eventId: string) => {
+    if (visiting.has(eventId)) fail(`Company event prerequisites contain a cycle at ${eventId}`);
+    if (visited.has(eventId)) return;
+    visiting.add(eventId);
+    for (const prerequisiteId of dependencyIds.get(eventId) ?? []) visit(prerequisiteId);
+    visiting.delete(eventId);
+    visited.add(eventId);
+  };
+  for (const event of events) visit(event.id);
+
+  const resolved = new Map<RawScenario, ResolvedEventPath>();
+  const seenPaths = new Set<string>();
+  for (const scenario of scenarios) {
+    const selections = new Map(scenario.eventPath.map((selection) => [selection.eventId, selection]));
+    if (selections.size !== scenario.eventPath.length || selections.size !== events.length) {
+      fail(`${scenario.name} must select exactly one state for every company event`);
+    }
+    const selectedRefs = new Set<string>();
+    for (const event of events) {
+      const selection = selections.get(event.id);
+      if (!selection) fail(`${scenario.name} is missing event ${event.id}`);
+      const state = event.states.find(({ id }) => id === selection.stateId);
+      if (!state) fail(`${scenario.name} selects unknown state ${event.id}:${selection.stateId}`);
+      if (selection.occursOn < event.dateWindow.earliest || selection.occursOn > event.dateWindow.latest) {
+        fail(`${scenario.name} places ${event.id} outside its date window`);
+      }
+      selectedRefs.add(`${event.id}:${state.id}`);
+    }
+    const signature = [...selectedRefs].sort().join("|");
+    if (seenPaths.has(signature)) fail(`${scenario.name} duplicates an existing company event path`);
+    seenPaths.add(signature);
+
+    const impacts = new Map<string, number>();
+    let jointLikelihood = 1;
+    for (const event of events) {
+      const selection = selections.get(event.id)!;
+      const state = event.states.find(({ id }) => id === selection.stateId)!;
+      if (state.outcome === "occurs") {
+        for (const prerequisiteId of event.prerequisiteIds) {
+          const prerequisiteSelection = selections.get(prerequisiteId)!;
+          const prerequisiteEvent = eventMap.get(prerequisiteId)!;
+          const prerequisiteState = prerequisiteEvent.states.find(({ id }) => id === prerequisiteSelection.stateId)!;
+          if (prerequisiteState.outcome !== "occurs" || prerequisiteSelection.occursOn > selection.occursOn) {
+            fail(`${scenario.name} has ${event.id} before required event ${prerequisiteId}`);
+          }
+        }
+      }
+      for (const requiredRef of state.prerequisiteStateIds) {
+        if (!selectedRefs.has(requiredRef)) fail(`${scenario.name} requires state ${requiredRef}`);
+      }
+      for (const incompatibleRef of state.incompatibleStateIds) {
+        if (selectedRefs.has(incompatibleRef)) fail(`${scenario.name} combines incompatible states ${event.id}:${state.id} and ${incompatibleRef}`);
+      }
+      for (const impact of state.revenueImpacts) {
+        const previous = impacts.get(impact.exposureId);
+        if (previous === undefined || Math.abs(impact.impactPct) > Math.abs(previous)) {
+          impacts.set(impact.exposureId, impact.impactPct);
+        }
+      }
+      const applicable = event.conditionalLikelihoods
+        .filter((likelihood) =>
+          likelihood.stateId === state.id
+          && likelihood.givenStateIds.every((ref) => selectedRefs.has(ref))
+        )
+        .sort((a, b) => b.givenStateIds.length - a.givenStateIds.length);
+      if (applicable.length === 0) fail(`${scenario.name} has no applicable likelihood for ${event.id}:${state.id}`);
+      if (
+        applicable.length > 1
+        && applicable[0].givenStateIds.length === applicable[1].givenStateIds.length
+      ) {
+        fail(`${scenario.name} has ambiguous conditional likelihoods for ${event.id}:${state.id}`);
+      }
+      jointLikelihood *= applicable[0].likelihood;
+    }
+    if (jointLikelihood <= 0) fail(`${scenario.name} selects a zero-likelihood event combination`);
+    const revenueImpacts = [...impacts].map(([exposureId, impactPct]) => ({ exposureId, impactPct }));
+    resolved.set(scenario, {
+      revenueImpacts,
+      revenueImpactPct: revenueImpacts.reduce((sum, impact) => sum + impact.impactPct, 0),
+      jointLikelihood,
+    });
+  }
+  return resolved;
 }
 
 function mergeScenarioPair(existing: RawScenario, incoming: RawScenario): RawScenario {
@@ -790,17 +1095,16 @@ function mergeDuplicateScenarios(scenarios: RawScenario[]): { scenarios: RawScen
   const retained: RawScenario[] = [];
   const merges: Array<{ retained: string; merged: string; reason: "name" | "factor-states" }> = [];
   for (const scenario of scenarios) {
-    const vector = JSON.stringify(scenario.factorStates);
+    const vector = JSON.stringify([...scenario.eventPath].sort((a, b) => a.eventId.localeCompare(b.eventId)));
     const duplicateIndex = retained.findIndex((candidate) =>
-      candidate.name.toLowerCase() === scenario.name.toLowerCase() ||
-      JSON.stringify(candidate.factorStates) === vector
+      JSON.stringify([...candidate.eventPath].sort((a, b) => a.eventId.localeCompare(b.eventId))) === vector
     );
     if (duplicateIndex < 0) {
       retained.push(scenario);
       continue;
     }
     const duplicate = retained[duplicateIndex];
-    const reason = duplicate.name.toLowerCase() === scenario.name.toLowerCase() ? "name" : "factor-states";
+    const reason = "factor-states";
     const merged = mergeScenarioPair(duplicate, scenario);
     retained[duplicateIndex] = merged;
     merges.push({
@@ -832,25 +1136,7 @@ function recoverScenarioPrices(
   if (dropped.length > 0) console.warn("Dropped invalid analysis scenarios", { dropped });
 
   valid.sort((a, b) => a.price - b.price || a.raw.name.localeCompare(b.raw.name));
-  const retained: Array<{ raw: RawScenario; price: number }> = [];
-  const merges: Array<{ retained: string; merged: string; terminalPrice: number }> = [];
-  for (const candidate of valid) {
-    const previous = retained.at(-1);
-    if (!previous || Math.abs(candidate.price - previous.price) >= 0.01) {
-      retained.push(candidate);
-      continue;
-    }
-    const raw = mergeScenarioPair(previous.raw, candidate.raw);
-    const price = deriveScenario(raw, baseline, currentPrice).price;
-    retained[retained.length - 1] = { raw, price };
-    merges.push({
-      retained: raw.name,
-      merged: raw.name === candidate.raw.name ? previous.raw.name : candidate.raw.name,
-      terminalPrice: price,
-    });
-  }
-  if (merges.length > 0) console.warn("Merged scenarios with overlapping terminal prices", { merges });
-  return { scenarios: retained.map(({ raw }) => raw), droppedCount: dropped.length, mergedCount: merges.length };
+  return { scenarios: valid.map(({ raw }) => raw), droppedCount: dropped.length, mergedCount: 0 };
 }
 
 function addPriceBuckets(scenarios: Array<Omit<Scenario, "priceRangeMin" | "priceRangeMax">>): Scenario[] {
@@ -862,6 +1148,37 @@ function addPriceBuckets(scenarios: Array<Omit<Scenario, "priceRangeMin" | "pric
       index === ascending.length - 1 ? null : (scenario.price + ascending[index + 1].price) / 2,
   }));
   return withBuckets.sort((a, b) => b.price - a.price);
+}
+
+function aggregateValuedPaths(
+  paths: Array<Omit<Scenario, "priceRangeMin" | "priceRangeMax">>,
+): Array<Omit<Scenario, "priceRangeMin" | "priceRangeMax">> {
+  const buckets: Array<Omit<Scenario, "priceRangeMin" | "priceRangeMax">> = [];
+  for (const path of [...paths].sort((a, b) => a.price - b.price || a.name.localeCompare(b.name))) {
+    const bucket = buckets.at(-1);
+    if (!bucket || Math.abs(bucket.price - path.price) >= EPSILON) {
+      buckets.push(path);
+      continue;
+    }
+    const priorProbability = bucket.probability;
+    const probability = priorProbability + path.probability;
+    const weighted = (left: number, right: number) =>
+      probability === 0 ? 0 : (left * priorProbability + right * path.probability) / probability;
+    bucket.relativeLikelihood += path.relativeLikelihood;
+    bucket.probability = probability;
+    bucket.totalReturnPct = weighted(bucket.totalReturnPct, path.totalReturnPct);
+    bucket.annualizedReturnPct = weighted(bucket.annualizedReturnPct, path.annualizedReturnPct);
+    bucket.valuationInputs = {
+      ...bucket.valuationInputs,
+      cumulativeDividendsPerShare: weighted(
+        bucket.valuationInputs.cumulativeDividendsPerShare,
+        path.valuationInputs.cumulativeDividendsPerShare,
+      ),
+    };
+    bucket.type = bucket.totalReturnPct < -10 ? "bear" : bucket.totalReturnPct > 20 ? "bull" : "base";
+    bucket.constituentPaths.push(...path.constituentPaths);
+  }
+  return buckets;
 }
 
 export function processAnalysis(value: unknown, requestedTicker: string, now = new Date()): Analysis {
@@ -897,6 +1214,10 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     if (!sourceIds.has(id)) fail("Instrument metadata references an unknown source ID");
   }
   auditReferences(raw.baseline.sourceIds, sourceIds, "baseline");
+  const resolvedEventPaths = validateEventModel(raw.companyEvents, raw.scenarios, sourceIds);
+  for (const scenario of raw.scenarios) {
+    scenario.relativeLikelihood = resolvedEventPaths.get(scenario)?.jointLikelihood ?? scenario.relativeLikelihood;
+  }
 
   const sources: Source[] = raw.sources.map((source) => ({
     ...source,
@@ -1028,11 +1349,40 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   const evidenceConfidence = calculateConfidence(research, sources);
   const confidence = Math.round(Math.max(0, evidenceConfidence - Math.min(15, recoveryCount * 1.5)));
   const probabilities = normalizeProbabilities(priceRecovered.scenarios, confidence);
-  const derived = priceRecovered.scenarios.map((scenario, index) => ({
-    ...deriveScenario(scenario, raw.baseline, raw.currentPrice),
-    probability: probabilities[index],
-  }));
-  const scenarios = addPriceBuckets(derived);
+  const derived = priceRecovered.scenarios.map((scenario, index) => {
+    const resolvedPath = resolvedEventPaths.get(scenario);
+    if (!resolvedPath) fail(`${scenario.name} is missing a resolved event path`);
+    const valued = deriveScenario(
+      scenario,
+      raw.baseline,
+      raw.currentPrice,
+      resolvedPath.revenueImpactPct,
+    );
+    const probability = probabilities[index];
+    return {
+      ...valued,
+      probability,
+      constituentPaths: [{
+        name: scenario.name,
+        eventPath: scenario.eventPath,
+        probability,
+        terminalPrice: valued.price,
+        cumulativeDividendsPerShare: scenario.valuationInputs.cumulativeDividendsPerShare,
+        terminalWealth: valued.price + scenario.valuationInputs.cumulativeDividendsPerShare,
+        revenueImpacts: resolvedPath.revenueImpacts,
+      }],
+    };
+  });
+  const scenarios = addPriceBuckets(aggregateValuedPaths(derived));
+  const probabilitySubtotal = scenarios.slice(0, -1).reduce((sum, scenario) => sum + scenario.probability, 0);
+  const finalScenario = scenarios.at(-1);
+  if (finalScenario) {
+    const correctedProbability = 100 - probabilitySubtotal;
+    const correction = correctedProbability - finalScenario.probability;
+    finalScenario.probability = correctedProbability;
+    const finalPath = finalScenario.constituentPaths.at(-1);
+    if (finalPath) finalPath.probability += correction;
+  }
   const expectedPrice = scenarios.reduce((sum, scenario) => sum + scenario.probability * scenario.price, 0) / 100;
   const terminalPriceStandardDeviation = Math.sqrt(
     scenarios.reduce(
@@ -1056,8 +1406,8 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     expectedAnnualizedReturnPct,
     confidence,
     probabilityMethod: recoveryCount > 0
-      ? `Evidence-shrunk relative likelihoods; ${recoveryCount} invalid or overlapping scenario${recoveryCount === 1 ? "" : "s"} consolidated; server-normalized to 100.0%`
-      : "Evidence-shrunk relative likelihoods; server-normalized to 100.0%",
+      ? `Joint conditional event likelihoods, evidence-shrunk toward equal priors; ${recoveryCount} invalid scenario${recoveryCount === 1 ? "" : "s"} removed; server-normalized to 100.0%`
+      : "Joint conditional event likelihoods, evidence-shrunk toward equal priors; server-normalized to 100.0%",
   };
 }
 
@@ -1080,6 +1430,11 @@ export function isAnalysisPublishable(value: Analysis): boolean {
     && value.confidence > 0
     && Array.isArray(value.scenarios)
     && value.scenarios.length >= MIN_RETAINED_SCENARIOS
+    && Array.isArray(value.companyEvents)
+    && value.companyEvents.length > 0
+    && value.eventModelMetadata?.inputProbabilityKind === "elicited-conditional-assumptions"
+    && value.eventModelMetadata?.outputProbabilityKind === "evidence-calibrated-path-probabilities"
+    && value.scenarios.every((scenario) => Array.isArray(scenario.constituentPaths) && scenario.constituentPaths.length > 0)
     && researchCoverage >= MIN_RESEARCH_COVERAGE
     && sourcesAreReal;
 }

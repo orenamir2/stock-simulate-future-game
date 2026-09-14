@@ -59,6 +59,22 @@ function factorStatesForRank(index: number): FactorStates {
 
 function makeSample(): Analysis {
   const baselineRevenue = 390;
+  const companyEvents: RawAnalysis["companyEvents"] = Array.from({ length: 5 }, (_, index) => ({
+    id: `illustrative-event-${index + 1}`,
+    name: `Illustrative company event ${index + 1}`,
+    dateWindow: { earliest: "2026-09-01", latest: "2029-08-31" },
+    prerequisiteIds: [],
+    states: [
+      { id: "occurs", label: "Occurs", outcome: "occurs", prerequisiteStateIds: [], incompatibleStateIds: [], revenueImpacts: [] },
+      { id: "absent", label: "Does not occur", outcome: "does-not-occur", prerequisiteStateIds: [], incompatibleStateIds: [], revenueImpacts: [] },
+    ],
+    conditionalLikelihoods: [
+      { stateId: "occurs", givenStateIds: [], likelihood: 0.5, basis: "elicited-assumption", evidenceSourceIds: ["s1"], unknowns: ["Illustrative assumption"] },
+      { stateId: "absent", givenStateIds: [], likelihood: 0.5, basis: "elicited-assumption", evidenceSourceIds: ["s1"], unknowns: ["Illustrative assumption"] },
+    ],
+    evidenceSourceIds: ["s1"],
+    unknowns: ["Illustrative timing"],
+  }));
   const scenarios: RawAnalysis["scenarios"] = sampleScenarioInputs.map(
     ([name, weight, targetPrice, thesis], index) => {
       const revenueCagrPct = 8 - index * 0.65;
@@ -73,6 +89,11 @@ function makeSample(): Analysis {
         probabilityRationale: "Illustrative relative weight; live runs must ground this in cited base rates and evidence.",
         valuationMethod: "Forward net-income multiple",
         factorStates: factorStatesForRank(index),
+        eventPath: companyEvents.map((event, eventIndex) => ({
+          eventId: event.id,
+          stateId: (index >> eventIndex) & 1 ? "occurs" : "absent",
+          occursOn: `2027-0${eventIndex + 1}-01`,
+        })),
         valuationInputs: {
           revenueCagrPct,
           operatingMarginPct: netIncomeMarginPct + 5,
@@ -159,6 +180,13 @@ function makeSample(): Analysis {
       balanceSheetValue: 60,
       sourceIds: ["s1", "s2"],
     },
+    eventModelMetadata: {
+      pathGeneration: "sampled",
+      inputProbabilityKind: "elicited-conditional-assumptions",
+      outputProbabilityKind: "evidence-calibrated-path-probabilities",
+      calibrationMethod: "Illustrative conditional assumptions are evidence-shrunk and normalized by the server.",
+    },
+    companyEvents,
     scenarios,
     signals: [
       { label: "Earnings quality", value: "Strong", tone: "good", detail: "Illustrative margin and cash-conversion signal" },
@@ -499,6 +527,7 @@ export default function Home() {
               <span>{scenario.thesis}</span>
               <b>{scenario.valuationMethod}: {scenario.valuationMetricValue.toFixed(1)} {analysis.baseline.scale} × {scenario.valuationInputs.valuationMultiple.toFixed(1)} = {scenario.targetEquityValue.toFixed(1)} {analysis.baseline.scale} equity ÷ {scenario.targetDilutedShares.toFixed(2)} {analysis.baseline.scale} shares = {formatMoney(scenario.price, analysis.tradingCurrency)}</b>
               <em>Outcome bucket {formatMoney(scenario.priceRangeMin, analysis.tradingCurrency, 0)} to {upperRange} · {scenario.keyDrivers.join(" · ")}</em>
+              <i>{scenario.constituentPaths.length} coherent event path{scenario.constituentPaths.length === 1 ? "" : "s"}: {scenario.constituentPaths.map((path) => path.name).join(" · ")}</i>
               <i>{scenario.probabilityRationale} Sources {scenario.sourceIds.map((id) => `[${id}]`).join(" ")}</i>
             </small></span>
             <span className="prob"><i><b style={{ width: `${Math.min(scenario.probability * 7, 100)}%` }} /></i>{scenario.probability.toFixed(1)}%</span>
