@@ -23,6 +23,22 @@ function factorStates(index: number): FactorStates {
 }
 
 export function makeRawAnalysis(): RawAnalysis {
+  const companyEvents: RawAnalysis["companyEvents"] = Array.from({ length: 5 }, (_, index) => ({
+    id: `event-${index + 1}`,
+    name: `Company event ${index + 1}`,
+    dateWindow: { earliest: "2025-01-01", latest: "2027-12-31" },
+    prerequisiteIds: [],
+    states: [
+      { id: "occurs", label: "Occurs", outcome: "occurs" as const, prerequisiteStateIds: [], incompatibleStateIds: [], revenueImpacts: [] },
+      { id: "absent", label: "Does not occur", outcome: "does-not-occur" as const, prerequisiteStateIds: [], incompatibleStateIds: [], revenueImpacts: [] },
+    ],
+    conditionalLikelihoods: [
+      { stateId: "occurs", givenStateIds: [], likelihood: 0.5, basis: "elicited-assumption" as const, evidenceSourceIds: ["s1"], unknowns: ["Fixture uncertainty"] },
+      { stateId: "absent", givenStateIds: [], likelihood: 0.5, basis: "elicited-assumption" as const, evidenceSourceIds: ["s1"], unknowns: ["Fixture uncertainty"] },
+    ],
+    evidenceSourceIds: ["s1"],
+    unknowns: ["Fixture event timing"],
+  }));
   return {
     ticker: "TEST",
     company: "Test Company",
@@ -55,6 +71,13 @@ export function makeRawAnalysis(): RawAnalysis {
       balanceSheetValue: 80,
       sourceIds: ["s1", "s2"],
     },
+    eventModelMetadata: {
+      pathGeneration: "enumerated",
+      inputProbabilityKind: "elicited-conditional-assumptions",
+      outputProbabilityKind: "evidence-calibrated-path-probabilities",
+      calibrationMethod: "Fixture likelihoods are evidence-shrunk and normalized by the server.",
+    },
+    companyEvents,
     scenarios: Array.from({ length: 20 }, (_, index) => ({
       name: `Scenario ${index + 1}`,
       thesis: `Distinct scenario ${index + 1}`,
@@ -62,6 +85,11 @@ export function makeRawAnalysis(): RawAnalysis {
       probabilityRationale: "Fixture likelihood rationale",
       valuationMethod: "Forward net-income multiple",
       factorStates: factorStates(index),
+      eventPath: companyEvents.map((event, eventIndex) => ({
+        eventId: event.id,
+        stateId: (index >> eventIndex) & 1 ? "occurs" : "absent",
+        occursOn: `2026-0${eventIndex + 1}-01`,
+      })),
       valuationInputs: {
         revenueCagrPct: -5 + index,
         operatingMarginPct: 12 + index * 0.5,

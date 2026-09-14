@@ -55,6 +55,55 @@ export type FactorStates = {
   balanceSheet: "deteriorating" | "steady" | "improving";
 };
 
+export type EventStateRef = `${string}:${string}`;
+
+export type RevenueImpact = {
+  exposureId: string;
+  impactPct: number;
+};
+
+export type CompanyEventState = {
+  id: string;
+  label: string;
+  outcome: "occurs" | "does-not-occur";
+  prerequisiteStateIds: EventStateRef[];
+  incompatibleStateIds: EventStateRef[];
+  revenueImpacts: RevenueImpact[];
+};
+
+export type ConditionalLikelihood = {
+  stateId: string;
+  givenStateIds: EventStateRef[];
+  likelihood: number;
+  basis: "elicited-assumption" | "calibrated-probability";
+  evidenceSourceIds: string[];
+  unknowns: string[];
+};
+
+export type CompanyEvent = {
+  id: string;
+  name: string;
+  dateWindow: { earliest: string; latest: string };
+  prerequisiteIds: string[];
+  states: CompanyEventState[];
+  conditionalLikelihoods: ConditionalLikelihood[];
+  evidenceSourceIds: string[];
+  unknowns: string[];
+};
+
+export type EventModelMetadata = {
+  pathGeneration: "enumerated" | "sampled";
+  inputProbabilityKind: "elicited-conditional-assumptions";
+  outputProbabilityKind: "evidence-calibrated-path-probabilities";
+  calibrationMethod: string;
+};
+
+export type EventPathSelection = {
+  eventId: string;
+  stateId: string;
+  occursOn: string;
+};
+
 export type ValuationInputs = {
   revenueCagrPct: number;
   operatingMarginPct: number;
@@ -77,9 +126,20 @@ export type RawScenario = {
   probabilityRationale: string;
   valuationMethod: string;
   factorStates: FactorStates;
+  eventPath: EventPathSelection[];
   valuationInputs: ValuationInputs;
   keyDrivers: string[];
   sourceIds: string[];
+};
+
+export type ValuedEventPath = {
+  name: string;
+  eventPath: EventPathSelection[];
+  probability: number;
+  terminalPrice: number;
+  cumulativeDividendsPerShare: number;
+  terminalWealth: number;
+  revenueImpacts: RevenueImpact[];
 };
 
 export type Scenario = RawScenario & {
@@ -95,6 +155,7 @@ export type Scenario = RawScenario & {
   type: "bull" | "base" | "bear";
   priceRangeMin: number;
   priceRangeMax: number | null;
+  constituentPaths: ValuedEventPath[];
 };
 
 export type BaselineFinancials = {
@@ -131,6 +192,8 @@ export type RawAnalysis = {
   fxSourceId: string;
   summary: string;
   baseline: BaselineFinancials;
+  eventModelMetadata: EventModelMetadata;
+  companyEvents: CompanyEvent[];
   scenarios: RawScenario[];
   signals: Signal[];
   research: RawResearchFinding[];
