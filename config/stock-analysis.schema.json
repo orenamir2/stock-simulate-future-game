@@ -51,8 +51,8 @@
       "required": ["pathGeneration", "inputProbabilityKind", "outputProbabilityKind", "calibrationMethod"],
       "properties": {
         "pathGeneration": { "type": "string", "enum": ["enumerated", "sampled"] },
-        "inputProbabilityKind": { "const": "elicited-conditional-assumptions" },
-        "outputProbabilityKind": { "const": "evidence-calibrated-path-probabilities" },
+        "inputProbabilityKind": { "type": "string", "const": "elicited-conditional-assumptions" },
+        "outputProbabilityKind": { "type": "string", "const": "evidence-calibrated-path-probabilities" },
         "calibrationMethod": { "type": "string", "minLength": 1, "maxLength": 1000 }
       }
     },
