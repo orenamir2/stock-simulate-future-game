@@ -33,11 +33,79 @@ jobs:
       - name: Run production build and tests
         run: npm test
 
-  publish:
-    name: Publish immutable image to GHCR
+  publish-platform:
+    name: Build and publish ${{ matrix.platform }} image
     if: github.event_name != 'pull_request'
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+      - name: Normalize image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Sign in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          labels: |
+            org.opencontainers.image.title=Possible
+            org.opencontainers.image.description=Probability-weighted stock scenario research agent with Codex CLI
+      - name: Build and push platform image by digest
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=container-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.arch }}
+          provenance: true
+          sbom: true
+      - name: Export image digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - name: Upload image digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-platform image manifest
+    if: github.event_name != 'pull_request'
+    needs: publish-platform
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
@@ -45,10 +113,14 @@ jobs:
       id-token: write
     outputs:
       image: ${{ steps.image.outputs.name }}
-      digest: ${{ steps.push.outputs.digest }}
+      digest: ${{ steps.manifest.outputs.digest }}
     steps:
-      - name: Check out source
-        uses: actions/checkout@v6
+      - name: Download platform digests
+        uses: actions/download-artifact@v5
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
       - name: Normalize image name
         id: image
         shell: bash
@@ -72,24 +144,34 @@ jobs:
           labels: |
             org.opencontainers.image.title=Possible
             org.opencontainers.image.description=Probability-weighted stock scenario research agent with Codex CLI
-      - name: Build and push image
-        id: push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: true
-          sbom: true
+      - name: Create and inspect multi-platform manifest
+        id: manifest
+        shell: bash
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          tag_args=()
+          while IFS= read -r tag; do
+            tag_args+=(--tag "$tag")
+          done <<< "$TAGS"
+
+          digest_refs=()
+          for digest in *; do
+            digest_refs+=("$IMAGE@sha256:$digest")
+          done
+
+          docker buildx imagetools create "${tag_args[@]}" "${digest_refs[@]}"
+          digest="$(docker buildx imagetools inspect "$IMAGE:sha-$GITHUB_SHA" --format '{{.Manifest.Digest}}')"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          docker buildx imagetools inspect "$IMAGE@$digest"
       - name: Attest image provenance
         uses: actions/attest@v4
         with:
           subject-name: ${{ steps.image.outputs.name }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.manifest.outputs.digest }}
           push-to-registry: true
 
   deploy:
