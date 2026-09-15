@@ -232,6 +232,7 @@ function runCodex(
     let reasoningItemCount = 0;
     let eventCount = 0;
     let latestWebSearchQuery: string | null = null;
+    let codexErrorMessage = "";
 
     const updateProgress = (
       step: number,
@@ -271,6 +272,15 @@ function runCodex(
       lastEventType = eventType;
       const item = codexEventItem(event);
       const itemType = item && typeof item.type === "string" ? item.type : null;
+
+      if (eventType === "error" && typeof event.message === "string") {
+        codexErrorMessage = event.message;
+        return;
+      }
+      if (eventType === "turn.failed" && isRecord(event.error) && typeof event.error.message === "string") {
+        codexErrorMessage = event.error.message;
+        return;
+      }
 
       if (eventType === "thread.started") {
         updateProgress(3, "plan-research", "plan the company research and evidence gathering");
@@ -462,7 +472,7 @@ function runCodex(
       if (settled) return;
       consumeJsonLines(true);
       if (code !== 0) {
-        const detail = stderr.trim().slice(-4_000);
+        const detail = (stderr.trim() || codexErrorMessage.trim()).slice(-4_000);
         console.error("Codex research process exited unsuccessfully", {
           requestId,
           ticker,
