@@ -33,13 +33,13 @@ Every pull request runs the production build and tests. Every push to `main` the
 
 1. Builds the image for `linux/amd64` and `linux/arm64`, including the pinned Codex CLI.
 2. Publishes immutable SHA and `latest` tags to `ghcr.io/orenamir2/stock-simulate-future-game` with SBOM and provenance.
-3. Uses the self-hosted macOS ARM64 runner to create `possible/codex-auth-bootstrap` from the runner's local Codex login.
+3. Uses the self-hosted macOS ARM64 runner to create `possible/codex-auth-bootstrap` from the runner's local Codex login when the pod has not been authenticated yet.
 4. Deploys the exact GHCR digest to local Kubernetes.
-5. Verifies both Codex subscription authentication and application health.
+5. Verifies both Codex subscription authentication with a live minimal request and application health.
 
-The GHCR image never contains `auth.json`. Kubernetes mounts the credential as a read-only secret, and an init container copies it into a writable in-memory `CODEX_HOME` so Codex can refresh its tokens. The credential disappears when the pod is deleted.
+The GHCR image never contains `auth.json`. Kubernetes mounts the bootstrap credential as a read-only secret, and an init container seeds it only when the retained writable `CODEX_HOME` is empty. Codex then owns and refreshes the persistent pod credential without a later rollout replacing it with a stale bootstrap copy. The Codex-home volume is retained on `desktop-worker2`; authenticate that pod directly with `codex login --device-auth` so it does not share a rotating refresh token with the runner or desktop login.
 
-The self-hosted runner must have `kubectl` and access to the `docker-desktop` context. Run `codex login` as the same operating-system user that runs the runner. If its authentication file is elsewhere, set the repository variable `LOCAL_CODEX_AUTH_FILE` to its absolute path. `LOCAL_KUBE_CONTEXT` is optional and defaults to `docker-desktop`.
+The self-hosted runner must have `kubectl` and access to the `docker-desktop` context. For first bootstrap only, run `codex login` as the same operating-system user that runs the runner. If its authentication file is elsewhere, set the repository variable `LOCAL_CODEX_AUTH_FILE` to its absolute path. After the first rollout, run `kubectl -n possible exec -it deployment/possible -c possible -- codex login --device-auth` once to give the retained pod home an independent subscription session. `LOCAL_KUBE_CONTEXT` is optional and defaults to `docker-desktop`.
 
 For private GHCR pulls, configure repository secret `GHCR_PAT` with `read:packages`. If omitted, the deployment job refreshes the pull secret using its GitHub token.
 

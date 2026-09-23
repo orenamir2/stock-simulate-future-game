@@ -117,10 +117,20 @@ spec:
           imagePullPolicy: Always
           command: ["/bin/sh", "-c"]
           args:
-            - install -m 600 /codex-auth-source/auth.json /var/lib/codex/auth.json
+            - |
+              chown 0:0 /var/lib/codex
+              if [ ! -s /var/lib/codex/auth.json ]; then
+                install -m 600 /codex-auth-source/auth.json /var/lib/codex/auth.json
+              fi
+              chown 1000:1000 /var/lib/codex /var/lib/codex/auth.json
           securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
             capabilities:
+              add:
+                - CHOWN
               drop:
                 - ALL
             readOnlyRootFilesystem: true
@@ -134,8 +144,8 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: codex-home
-          emptyDir:
-            medium: Memory
+          persistentVolumeClaim:
+            claimName: possible-codex-home
         - name: codex-auth-source
           secret:
             secretName: codex-auth-bootstrap

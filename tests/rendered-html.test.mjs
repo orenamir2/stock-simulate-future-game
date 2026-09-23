@@ -95,10 +95,11 @@ test("keeps the probability and live-research guardrails", async () => {
 });
 
 test("ships container and Kubernetes delivery guardrails", async () => {
-  const [dockerfile, workflow, deployment, historyStorage, kustomization, service, health] = await Promise.all([
+  const [dockerfile, workflow, deployment, codexStorage, historyStorage, kustomization, service, health] = await Promise.all([
     readFile(new URL("../Dockerfile", import.meta.url), "utf8"),
     readFile(new URL("../.github/workflows/ci-container-k8s.yml", import.meta.url), "utf8"),
     readFile(new URL("../k8s/deployment.yaml", import.meta.url), "utf8"),
+    readFile(new URL("../k8s/codex-storage.yaml", import.meta.url), "utf8"),
     readFile(new URL("../k8s/history-storage.yaml", import.meta.url), "utf8"),
     readFile(new URL("../k8s/kustomization.yaml", import.meta.url), "utf8"),
     readFile(new URL("../k8s/service.yaml", import.meta.url), "utf8"),
@@ -113,6 +114,8 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(workflow, /codex-auth-bootstrap/);
   assert.match(workflow, /--field-selector=status\.phase=Running/);
   assert.match(workflow, /wait --for=condition=Ready/);
+  assert.match(workflow, /Reply with exactly AUTH_OK/);
+  assert.doesNotMatch(workflow, /codex login status/);
   assert.match(workflow, /runs-on: \[self-hosted, macOS, ARM64\]/);
   assert.match(workflow, /group: possible-production-\$\{\{ github\.ref \}\}/);
   assert.match(workflow, /set image deployment\/possible/);
@@ -121,17 +124,26 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /runAsUser: 1000/);
   assert.match(deployment, /ghcr-pull/);
   assert.match(deployment, /codex-auth-source/);
+  assert.match(deployment, /claimName: possible-codex-home/);
+  assert.match(deployment, /if \[ ! -s \/var\/lib\/codex\/auth\.json \]/);
   assert.match(deployment, /path: \/api\/health/);
   assert.match(deployment, /claimName: possible-analysis-history/);
   assert.match(deployment, /kubernetes\.io\/hostname: desktop-worker2/);
   assert.match(deployment, /name: prepare-analysis-history/);
   assert.match(deployment, /chown 1000:1000 \/var\/lib\/possible\/analysis-history/);
+  assert.match(deployment, /chown 0:0 \/var\/lib\/codex/);
+  assert.match(deployment, /chown 1000:1000 \/var\/lib\/codex \/var\/lib\/codex\/auth\.json/);
   assert.match(deployment, /add:\s+- CHOWN/);
+  assert.match(codexStorage, /kind: PersistentVolume/);
+  assert.match(codexStorage, /kind: PersistentVolumeClaim/);
+  assert.match(codexStorage, /persistentVolumeReclaimPolicy: Retain/);
+  assert.match(codexStorage, /\/var\/lib\/possible\/codex-home/);
   assert.match(historyStorage, /kind: PersistentVolume/);
   assert.match(historyStorage, /kind: PersistentVolumeClaim/);
   assert.match(historyStorage, /persistentVolumeReclaimPolicy: Retain/);
   assert.match(historyStorage, /data\/analysis-history/);
   assert.match(kustomization, /history-storage\.yaml/);
+  assert.match(kustomization, /codex-storage\.yaml/);
   assert.match(service, /type: LoadBalancer/);
   assert.match(service, /port: 8080/);
   assert.match(health, /status: "ok"/);

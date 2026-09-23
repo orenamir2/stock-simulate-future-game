@@ -231,7 +231,7 @@ jobs:
             prepare-codex-auth="$IMAGE"
       - name: Wait for healthy rollout
         run: kubectl -n possible rollout status deployment/possible --timeout=10m
-      - name: Verify Codex authentication and application health
+      - name: Verify live Codex authentication and application health
         shell: bash
         run: |
           pod="$(kubectl -n possible get pod \
@@ -239,7 +239,14 @@ jobs:
             --field-selector=status.phase=Running \
             -o jsonpath='{.items[0].metadata.name}')"
           kubectl -n possible wait --for=condition=Ready "pod/$pod" --timeout=2m
-          kubectl -n possible exec -c possible "$pod" -- codex login status
+          codex_result="$(kubectl -n possible exec -c possible "$pod" -- \
+            codex exec \
+              --ignore-user-config \
+              --ephemeral \
+              --sandbox read-only \
+              --skip-git-repo-check \
+              'Reply with exactly AUTH_OK.')"
+          grep -qx 'AUTH_OK' <<< "$codex_result"
           for attempt in {1..30}; do
             if curl --fail --silent --show-error http://localhost:8080/api/health; then
               exit 0
