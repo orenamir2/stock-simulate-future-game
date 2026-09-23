@@ -113,6 +113,9 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(workflow, /packages: write/);
   assert.match(workflow, /codex-auth-bootstrap/);
   assert.match(workflow, /--field-selector=status\.phase=Running/);
+  assert.match(workflow, /--sort-by=\.metadata\.creationTimestamp/);
+  assert.match(workflow, /not \.metadata\.deletionTimestamp/);
+  assert.doesNotMatch(workflow, /\.items\[0\]\.metadata\.name/);
   assert.match(workflow, /wait --for=condition=Ready/);
   assert.match(workflow, /Reply with exactly AUTH_OK/);
   assert.doesNotMatch(workflow, /codex login status/);

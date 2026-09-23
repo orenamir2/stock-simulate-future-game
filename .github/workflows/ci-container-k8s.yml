@@ -237,7 +237,13 @@ jobs:
           pod="$(kubectl -n possible get pod \
             -l app.kubernetes.io/name=possible \
             --field-selector=status.phase=Running \
-            -o jsonpath='{.items[0].metadata.name}')"
+            --sort-by=.metadata.creationTimestamp \
+            -o go-template='{{range .items}}{{if not .metadata.deletionTimestamp}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' \
+            | tail -n 1)"
+          if [[ -z "$pod" ]]; then
+            echo "No non-terminating running pod found for deployment/possible" >&2
+            exit 1
+          fi
           kubectl -n possible wait --for=condition=Ready "pod/$pod" --timeout=2m
           codex_result="$(kubectl -n possible exec -c possible "$pod" -- \
             codex exec \
