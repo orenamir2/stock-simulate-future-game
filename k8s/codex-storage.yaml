@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: possible-codex-home
+  labels:
+    app.kubernetes.io/name: possible
+spec:
+  capacity:
+    storage: 64Mi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: possible-codex-storage
+  hostPath:
+    path: /var/lib/possible/codex-home
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: possible-codex-home
+  namespace: possible
+  labels:
+    app.kubernetes.io/name: possible
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: possible-codex-storage
+  resources:
+    requests:
+      storage: 64Mi
