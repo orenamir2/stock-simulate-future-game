@@ -244,6 +244,7 @@ type StoredHistory = {
 };
 
 type AnalysisResponse = Analysis & {
+  history?: HistorySummary;
   historyWarning?: string;
 };
 
@@ -283,6 +284,9 @@ export default function Home() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyAction, setHistoryAction] = useState<string | null>(null);
   const [historyWarning, setHistoryWarning] = useState<string | null>(null);
+  const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
+  const [emailing, setEmailing] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const probabilityTotal = analysis.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0);
   const filtered = filter === "all" ? analysis.scenarios : analysis.scenarios.filter((scenario) => scenario.type === filter);
@@ -344,12 +348,42 @@ export default function Home() {
     }
   }
 
+  async function emailPdf() {
+    if (!currentHistoryId) {
+      setEmailStatus({ kind: "error", message: "Run or open a saved analysis before emailing its PDF." });
+      return;
+    }
+    setEmailing(true);
+    setEmailStatus(null);
+    try {
+      const response = await fetch("/api/email-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: currentHistoryId }),
+      });
+      const payload = await response.json() as { sent?: boolean; recipient?: string; error?: string };
+      if (!response.ok || !payload.sent || !payload.recipient) {
+        throw new Error(payload.error ?? "The analysis PDF could not be emailed");
+      }
+      setEmailStatus({ kind: "success", message: `PDF emailed to ${payload.recipient}.` });
+    } catch (caught) {
+      setEmailStatus({
+        kind: "error",
+        message: caught instanceof Error ? caught.message : "The analysis PDF could not be emailed",
+      });
+    } finally {
+      setEmailing(false);
+    }
+  }
+
   async function openHistoricalAnalysis(item: HistorySummary) {
     setHistoryAction(`open:${item.id}`);
     setHistoryError(null);
     try {
       const record = await fetchHistoricalAnalysis(item.id);
       setAnalysis(record.analysis);
+      setCurrentHistoryId(item.id);
+      setEmailStatus(null);
       setNotice(`Historical snapshot · saved ${formatHistoryDate(record.createdAt)}`);
       setExpanded(null);
       setOpenResearch(null);
@@ -394,6 +428,7 @@ export default function Home() {
     setExpanded(null);
     setError(null);
     setHistoryWarning(null);
+    setEmailStatus(null);
     const timer = window.setInterval(
       () => setStage((value) => Math.min(value + 1, stages.length - 1)),
       8_000,
@@ -410,6 +445,7 @@ export default function Home() {
         throw new Error("error" in payload && payload.error ? payload.error : "Research service unavailable");
       }
       setAnalysis(payload);
+      setCurrentHistoryId(payload.history?.id ?? null);
       setNotice("Live Codex web research");
       setHistoryWarning(payload.historyWarning ?? null);
       void refreshHistory();
@@ -461,6 +497,7 @@ export default function Home() {
 
     {error && <div className="errorBanner" role="alert"><strong>Analysis not replaced.</strong> {error}</div>}
     {historyWarning && <div className="warningBanner" role="alert"><strong>History not saved.</strong> {historyWarning}</div>}
+    {emailStatus && <div className={emailStatus.kind === "success" ? "successBanner" : "warningBanner"} role="status">{emailStatus.message}</div>}
 
     <section id="analysis" className="analysisSection">
       <div className="sectionIntro">
@@ -471,7 +508,10 @@ export default function Home() {
           <small>Price as of {formatTimestamp(analysis.priceAsOf)} · Fiscal data through {analysis.fiscalDataAsOf} · {analysis.instrumentIdType.toUpperCase()} {analysis.instrumentId}</small>
         </div>
         <div className="analysisActions">
-          <button className="exportButton" type="button" onClick={exportPdf} aria-label={`Export ${analysis.ticker} analysis as PDF`}><span aria-hidden="true">↓</span> Export PDF</button>
+          <div className="actionButtons">
+            <button className="exportButton" type="button" onClick={exportPdf} aria-label={`Export ${analysis.ticker} analysis as PDF`}><span aria-hidden="true">↓</span> Export PDF</button>
+            <button className="exportButton emailButton" type="button" onClick={() => void emailPdf()} disabled={!currentHistoryId || emailing} aria-label={`Email ${analysis.ticker} analysis PDF`} title={currentHistoryId ? undefined : "Run or open a saved analysis first"}><span aria-hidden="true">↗</span> {emailing ? "Sending…" : "Email PDF"}</button>
+          </div>
           <div className="confidence"><span>EVIDENCE CONFIDENCE</span><strong>{analysis.confidence}<small>/100</small></strong><div className="confidenceBar"><i style={{ width: `${analysis.confidence}%` }} /></div></div>
         </div>
       </div>

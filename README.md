@@ -47,6 +47,21 @@ The app is exposed locally at `http://localhost:8080`.
 
 Completed live analyses are written as individual JSON snapshots and shown in the History tab. The Kubernetes deployment mounts the `possible-analysis-history` PVC at `/var/lib/possible/analysis-history`. In this multi-node kind cluster, a `hostPath` is stored inside one virtual node's container filesystem; it is not automatically shared between kind nodes merely because they all run on the same Mac. The deployment is therefore pinned to `desktop-worker2`, which owns the retained history directory. Recreating that kind node also recreates its filesystem, so copy important snapshots out of the cluster before rebuilding it. Local `npm run dev` uses the project folder at `data/analysis-history` by default, or `ANALYSIS_HISTORY_DIR` when set.
 
+Saved analyses can also be emailed as the same PDF produced by **Export PDF**. Delivery uses authenticated SMTP and defaults to `orenamir2@gmail.com`; set `ANALYSIS_EMAIL_TO` to override the recipient. For Gmail, use an app password rather than the account password. Configure local development with `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, and optionally `SMTP_FROM`. Configure Kubernetes without committing credentials:
+
+```bash
+kubectl -n possible create secret generic possible-smtp \
+  --from-literal=SMTP_HOST=smtp.gmail.com \
+  --from-literal=SMTP_PORT=465 \
+  --from-literal=SMTP_SECURE=true \
+  --from-literal=SMTP_USER=your-sender@gmail.com \
+  --from-literal=SMTP_PASSWORD='your-app-password' \
+  --from-literal=SMTP_FROM=your-sender@gmail.com \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The SMTP secret is optional at deployment time so the rest of the app remains available before email is configured; the email endpoint returns a configuration error until the required values exist.
+
 ## Manual container test
 
 Never copy `auth.json` into an image. Mount a disposable writable Codex home instead:
