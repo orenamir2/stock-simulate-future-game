@@ -80,7 +80,9 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /CodexIdleTimeoutError/);
   assert.match(route, /CodexTerminalError/);
   assert.match(route, /CODEX_IDLE_TIMEOUT_MS/);
-  assert.match(route, /DEFAULT_CODEX_IDLE_TIMEOUT_MS = 1_800_000/);
+  assert.match(route, /DEFAULT_CODEX_TIMEOUT_MS = 1_500_000/);
+  assert.match(route, /DEFAULT_CODEX_IDLE_TIMEOUT_MS = 480_000/);
+  assert.match(route, /no more than 12 focused search queries/);
   assert.match(route, /codexStage: "research"/);
   assert.match(route, /codexStage: "generation"/);
   assert.match(route, /stock-research\.schema\.json/);
@@ -154,7 +156,8 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /if \[ ! -s \/var\/lib\/codex\/auth\.json \]/);
   assert.match(deployment, /path: \/api\/health/);
   assert.match(deployment, /claimName: possible-analysis-history/);
-  assert.match(deployment, /CODEX_IDLE_TIMEOUT_MS\s+value: "1800000"/);
+  assert.match(deployment, /CODEX_TIMEOUT_MS\s+value: "1500000"/);
+  assert.match(deployment, /CODEX_IDLE_TIMEOUT_MS\s+value: "480000"/);
   assert.match(deployment, /STOCK_RESEARCH_SCHEMA_PATH/);
   assert.match(deployment, /kubernetes\.io\/hostname: desktop-worker2/);
   assert.match(deployment, /name: prepare-analysis-history/);

@@ -23,8 +23,10 @@ import { researchFrameworkPrompt } from "../../../lib/research-framework";
 import type { Analysis } from "../../../lib/analysis-types";
 
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
-const DEFAULT_CODEX_TIMEOUT_MS = 3_600_000;
-const DEFAULT_CODEX_IDLE_TIMEOUT_MS = 1_800_000;
+// Keep the agent budget below the 30-minute user-facing limit so process-tree
+// shutdown, validation, persistence, and response delivery still have headroom.
+const DEFAULT_CODEX_TIMEOUT_MS = 1_500_000;
+const DEFAULT_CODEX_IDLE_TIMEOUT_MS = 480_000;
 const CODEX_PROGRESS_INTERVAL_MS = 30_000;
 const RESPONSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const MAX_RESEARCH_ATTEMPTS = 2;
@@ -720,6 +722,7 @@ REQUEST CONTEXT
 - Return ticker exactly as ${ticker} so the server can bind the result to this request; put the official exchange and durable local identifier in exchange and instrumentId.
 
 RESEARCH RULES
+- Keep the research pass bounded: use no more than 12 focused search queries in normal operation, prioritize 12–20 high-value exact source URLs, and stop browsing as soon as the required identifiers, baseline, event candidates, and minimum question coverage are supported. Mark remaining gaps partial or unanswered instead of chasing exhaustive coverage.
 - Resolve the exact security: exchange, security type, share class, durable instrument ID, trading currency, reporting currency, ADR ratio, fresh price and ISO-8601 price timestamp. Cite the exact market-data source ID.
 - Use the primary listed security requested, not a U.S. ADR or OTC line, unless the identifier explicitly names that instrument. Apply the exchange's local timezone when deciding which quote is latest.
 - Express prices, dividends and per-share valuation outputs in the major unit represented by tradingCurrency. Convert pence, agorot, euro cents and other minor-unit market quotes to GBP, ILS, EUR or the applicable ISO currency before returning numbers, and keep that unit consistent across currentPrice and every scenario.
