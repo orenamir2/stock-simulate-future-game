@@ -21,3 +21,15 @@ test("constant output-schema fields declare their JSON types", async () => {
   visit(schema, "");
   assert.deepEqual(missingTypes, []);
 });
+
+test("research schema captures evidence without scenario generation", async () => {
+  const schemaUrl = new URL("../config/stock-research.schema.json", import.meta.url);
+  const schema = JSON.parse(await readFile(schemaUrl, "utf8")) as {
+    required: string[];
+    properties: Record<string, unknown>;
+  };
+  assert.ok(schema.required.includes("eventCandidates"));
+  assert.ok(schema.required.includes("research"));
+  assert.ok(schema.required.includes("sources"));
+  assert.equal(Object.hasOwn(schema.properties, "scenarios"), false);
+});

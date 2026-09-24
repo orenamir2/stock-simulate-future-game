@@ -29,7 +29,7 @@ test("server-renders the scenario product", async () => {
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, historyRoute, historyStore, engine, framework, schema, layout, packageJson] = await Promise.all([
+  const [page, route, historyRoute, historyStore, engine, framework, schema, researchSchema, supervisor, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/history/route.ts", import.meta.url), "utf8"),
@@ -37,6 +37,8 @@ test("keeps the probability and live-research guardrails", async () => {
     readFile(new URL("../lib/analysis-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
     readFile(new URL("../config/stock-analysis.schema.json", import.meta.url), "utf8"),
+    readFile(new URL("../config/stock-research.schema.json", import.meta.url), "utf8"),
+    readFile(new URL("../lib/codex-supervisor.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
@@ -66,9 +68,20 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.doesNotMatch(route, /Codex research still running/);
   assert.match(route, /--sandbox/);
   assert.match(route, /read-only/);
-  assert.match(route, /web_search="live"/);
+  assert.match(route, /web_search=.*live/);
   assert.match(route, /model_reasoning_effort/);
   assert.match(route, /CodexTimeoutError/);
+  assert.match(route, /CodexIdleTimeoutError/);
+  assert.match(route, /CodexTerminalError/);
+  assert.match(route, /CODEX_IDLE_TIMEOUT_MS/);
+  assert.match(route, /codexStage: "research"/);
+  assert.match(route, /codexStage: "generation"/);
+  assert.match(route, /stock-research\.schema\.json/);
+  assert.match(route, /web_search=.*disabled/);
+  assert.match(route, /detached: process\.platform !== "win32"/);
+  assert.match(supervisor, /process\.kill\.bind\(process\)/);
+  assert.match(supervisor, /killGroup\(-child\.pid, "SIGKILL"\)/);
+  assert.match(supervisor, /child\.stdout\.destroy\(\)/);
   assert.match(route, /status: 504/);
   assert.match(route, /MAX_RESEARCH_ATTEMPTS = 2/);
   assert.match(route, /retry-insufficient-research/);
@@ -88,6 +101,9 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(schema, /"tradingCurrency"/);
   assert.match(schema, /"valuationInputs"/);
   assert.match(schema, /"questionIndex"/);
+  assert.match(researchSchema, /"eventCandidates"/);
+  assert.match(researchSchema, /"minItems": 12/);
+  assert.doesNotMatch(researchSchema, /"scenarios"/);
   assert.doesNotMatch(schema, /"expectedPrice"/);
   assert.doesNotMatch(route, /OPENAI_API_KEY/);
   assert.match(layout, /Possible/);
@@ -131,6 +147,8 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /if \[ ! -s \/var\/lib\/codex\/auth\.json \]/);
   assert.match(deployment, /path: \/api\/health/);
   assert.match(deployment, /claimName: possible-analysis-history/);
+  assert.match(deployment, /CODEX_IDLE_TIMEOUT_MS/);
+  assert.match(deployment, /STOCK_RESEARCH_SCHEMA_PATH/);
   assert.match(deployment, /kubernetes\.io\/hostname: desktop-worker2/);
   assert.match(deployment, /name: prepare-analysis-history/);
   assert.match(deployment, /chown 1000:1000 \/var\/lib\/possible\/analysis-history/);
