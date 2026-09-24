@@ -19,6 +19,7 @@ test("server-renders the scenario product", async () => {
   assert.match(html, /20 ways the next three years unfold/);
   assert.match(html, /Probability check/);
   assert.match(html, /Export PDF/);
+  assert.match(html, /Email PDF/);
   assert.match(html, /History/);
   assert.match(html, /South Korea/);
   assert.match(html, /Israel/);
@@ -29,10 +30,12 @@ test("server-renders the scenario product", async () => {
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, historyRoute, historyStore, engine, framework, schema, researchSchema, supervisor, layout, packageJson] = await Promise.all([
+  const [page, route, historyRoute, emailRoute, emailModule, historyStore, engine, framework, schema, researchSchema, supervisor, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/history/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/email-analysis/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/analysis-email.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-history.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
@@ -50,6 +53,9 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /processAnalysis/);
   assert.match(route, /saveAnalysisHistory/);
   assert.match(historyRoute, /listAnalysisHistory/);
+  assert.match(emailRoute, /sendAnalysisReportEmail/);
+  assert.match(emailModule, /createAnalysisReportPdf/);
+  assert.match(emailModule, /orenamir2@gmail\.com/);
   assert.match(historyStore, /ANALYSIS_HISTORY_DIR/);
   assert.match(engine, /normalizeProbabilities/);
   assert.match(engine, /deriveScenario/);

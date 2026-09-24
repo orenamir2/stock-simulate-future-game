@@ -59,6 +59,10 @@ spec:
               value: low
             - name: ANALYSIS_HISTORY_DIR
               value: /var/lib/possible/analysis-history
+          envFrom:
+            - secretRef:
+                name: possible-smtp
+                optional: true
           readinessProbe:
             httpGet:
               path: /api/health
