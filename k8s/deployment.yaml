@@ -58,7 +58,7 @@ spec:
             - name: CODEX_REASONING_EFFORT
               value: low
             - name: CODEX_GENERATION_REASONING_EFFORT
-              value: minimal
+              value: none
             - name: ANALYSIS_HISTORY_DIR
               value: /var/lib/possible/analysis-history
           envFrom:

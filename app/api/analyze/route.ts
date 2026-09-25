@@ -30,7 +30,7 @@ const DEFAULT_CODEX_IDLE_TIMEOUT_MS = 480_000;
 const CODEX_PROGRESS_INTERVAL_MS = 30_000;
 const RESPONSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const MAX_RESEARCH_ATTEMPTS = 2;
-const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const ANALYSIS_STEP_COUNT = 8;
 let researchInProgress = false;
 
@@ -123,7 +123,7 @@ function codexIdleTimeoutMs(): number {
 }
 
 function codexReasoningEffort(codexStage: CodexStage): string {
-  const fallback = codexStage === "generation" ? "minimal" : "low";
+  const fallback = codexStage === "generation" ? "none" : "low";
   const configured = (
     codexStage === "generation"
       ? process.env.CODEX_GENERATION_REASONING_EFFORT ?? process.env.CODEX_REASONING_EFFORT

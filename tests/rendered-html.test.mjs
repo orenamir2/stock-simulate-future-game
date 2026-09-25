@@ -160,7 +160,7 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /claimName: possible-analysis-history/);
   assert.match(deployment, /CODEX_TIMEOUT_MS\s+value: "1500000"/);
   assert.match(deployment, /CODEX_IDLE_TIMEOUT_MS\s+value: "480000"/);
-  assert.match(deployment, /CODEX_GENERATION_REASONING_EFFORT\s+value: minimal/);
+  assert.match(deployment, /CODEX_GENERATION_REASONING_EFFORT\s+value: none/);
   assert.match(deployment, /STOCK_RESEARCH_SCHEMA_PATH/);
   assert.match(deployment, /kubernetes\.io\/hostname: desktop-worker2/);
   assert.match(deployment, /name: prepare-analysis-history/);
