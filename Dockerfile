@@ -26,6 +26,7 @@ ENV NODE_ENV=production \
     CODEX_HOME=/var/lib/codex \
     ANALYSIS_HISTORY_DIR=/var/lib/possible/analysis-history \
     CODEX_REASONING_EFFORT=low \
+    CODEX_GENERATION_REASONING_EFFORT=minimal \
     CODEX_TIMEOUT_MS=1500000 \
     CODEX_IDLE_TIMEOUT_MS=480000 \
     STOCK_RESEARCH_SCHEMA_PATH=/app/config/stock-research.schema.json \

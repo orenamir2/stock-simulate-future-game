@@ -122,9 +122,14 @@ function codexIdleTimeoutMs(): number {
   return configuredDurationMs(process.env.CODEX_IDLE_TIMEOUT_MS, DEFAULT_CODEX_IDLE_TIMEOUT_MS);
 }
 
-function codexReasoningEffort(): string {
-  const configured = process.env.CODEX_REASONING_EFFORT?.trim().toLowerCase() ?? "low";
-  return REASONING_EFFORTS.has(configured) ? configured : "low";
+function codexReasoningEffort(codexStage: CodexStage): string {
+  const fallback = codexStage === "generation" ? "minimal" : "low";
+  const configured = (
+    codexStage === "generation"
+      ? process.env.CODEX_GENERATION_REASONING_EFFORT ?? process.env.CODEX_REASONING_EFFORT
+      : process.env.CODEX_REASONING_EFFORT
+  )?.trim().toLowerCase() ?? fallback;
+  return REASONING_EFFORTS.has(configured) ? configured : fallback;
 }
 
 function codexEnvironment(): NodeJS.ProcessEnv {
@@ -224,8 +229,11 @@ function runCodex({
   overallTimeoutMs: number;
   signal?: AbortSignal;
 }): Promise<string> {
-  const reasoningEffort = codexReasoningEffort();
-  const idleTimeoutMs = codexIdleTimeoutMs();
+  const reasoningEffort = codexReasoningEffort(codexStage);
+  // The generation command emits no intermediate events while constructing its
+  // large schema-constrained JSON response. Treating that silence as inactivity
+  // aborts healthy work, so generation relies on the request's hard deadline.
+  const idleTimeoutMs = codexStage === "research" ? codexIdleTimeoutMs() : null;
   const args = [
     "exec",
     "--json",
@@ -273,7 +281,7 @@ function runCodex({
     let eventCount = 0;
     let latestWebSearchQuery: string | null = null;
     let codexErrorMessage = "";
-    let idleTimer: ReturnType<typeof setTimeout>;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
     const updateProgress = (
       step: number,
@@ -313,7 +321,7 @@ function runCodex({
       if (settled) return;
       settled = true;
       clearTimeout(overallTimer);
-      clearTimeout(idleTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       clearInterval(progressTimer);
       signal?.removeEventListener("abort", abort);
       const details = {
@@ -361,7 +369,8 @@ function runCodex({
     };
 
     const resetIdleTimer = () => {
-      clearTimeout(idleTimer);
+      if (idleTimeoutMs === null) return;
+      if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         terminate(new CodexIdleTimeoutError(idleTimeoutMs, codexStage));
       }, idleTimeoutMs);
