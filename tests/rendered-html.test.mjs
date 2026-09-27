@@ -30,7 +30,7 @@ test("server-renders the scenario product", async () => {
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, historyRoute, emailRoute, emailModule, historyStore, dossierStore, engine, framework, schema, researchSchema, scenarioSchema, supervisor, layout, packageJson] = await Promise.all([
+  const [page, route, historyRoute, emailRoute, emailModule, historyStore, dossierStore, researchOutput, engine, framework, schema, researchSchema, scenarioSchema, supervisor, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/history/route.ts", import.meta.url), "utf8"),
@@ -38,6 +38,7 @@ test("keeps the probability and live-research guardrails", async () => {
     readFile(new URL("../lib/analysis-email.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-history.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-dossier.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/research-output.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
     readFile(new URL("../config/stock-analysis.schema.json", import.meta.url), "utf8"),
@@ -60,6 +61,7 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(emailModule, /orenamir2@gmail\.com/);
   assert.match(historyStore, /ANALYSIS_HISTORY_DIR/);
   assert.match(dossierStore, /research-dossiers/);
+  assert.match(researchOutput, /parseResearchDossierOutput/);
   assert.match(engine, /normalizeProbabilities/);
   assert.match(engine, /deriveScenario/);
   assert.match(engine, /addPriceBuckets/);
@@ -97,6 +99,8 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /MAX_GENERATION_ATTEMPTS = 2/);
   assert.match(route, /MAX_RESEARCH_PROCESS_ATTEMPTS = 2/);
   assert.match(route, /retry-stalled-research/);
+  assert.match(route, /retry-invalid-research-output/);
+  assert.match(route, /researchStructuredOutput: false/);
   assert.match(route, /retry-scenario-generation/);
   assert.match(route, /composeAnalysis/);
   assert.match(route, /loadRecentResearchDossierCheckpoint/);
