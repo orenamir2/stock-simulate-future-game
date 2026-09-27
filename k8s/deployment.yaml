@@ -55,6 +55,8 @@ spec:
               value: "1500000"
             - name: CODEX_IDLE_TIMEOUT_MS
               value: "480000"
+            - name: CODEX_STARTUP_TIMEOUT_MS
+              value: "120000"
             - name: CODEX_GENERATION_TIMEOUT_MS
               value: "600000"
             - name: CODEX_REASONING_EFFORT

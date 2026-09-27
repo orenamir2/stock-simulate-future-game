@@ -33,10 +33,12 @@ const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 // shutdown, validation, persistence, and response delivery still have headroom.
 const DEFAULT_CODEX_TIMEOUT_MS = 1_500_000;
 const DEFAULT_CODEX_IDLE_TIMEOUT_MS = 480_000;
+const DEFAULT_CODEX_STARTUP_TIMEOUT_MS = 120_000;
 const DEFAULT_CODEX_GENERATION_TIMEOUT_MS = 600_000;
 const CODEX_PROGRESS_INTERVAL_MS = 30_000;
 const RESPONSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const MAX_RESEARCH_ATTEMPTS = 2;
+const MAX_RESEARCH_PROCESS_ATTEMPTS = 2;
 const MAX_GENERATION_ATTEMPTS = 2;
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const ANALYSIS_STEP_COUNT = 8;
@@ -109,8 +111,16 @@ class CodexTimeoutError extends Error {
 }
 
 class CodexIdleTimeoutError extends Error {
-  constructor(readonly idleTimeoutMs: number, readonly codexStage: CodexStage) {
-    super(`Codex ${codexStage} produced no output for ${Math.round(idleTimeoutMs / 1000)} seconds`);
+  constructor(
+    readonly idleTimeoutMs: number,
+    readonly codexStage: CodexStage,
+    readonly beforeProgress = false,
+  ) {
+    super(
+      beforeProgress
+        ? `Codex ${codexStage} produced no meaningful progress for ${Math.round(idleTimeoutMs / 1000)} seconds`
+        : `Codex ${codexStage} produced no output for ${Math.round(idleTimeoutMs / 1000)} seconds`,
+    );
     this.name = "CodexIdleTimeoutError";
   }
 }
@@ -128,6 +138,10 @@ function codexTimeoutMs(): number {
 
 function codexIdleTimeoutMs(): number {
   return configuredDurationMs(process.env.CODEX_IDLE_TIMEOUT_MS, DEFAULT_CODEX_IDLE_TIMEOUT_MS);
+}
+
+function codexStartupTimeoutMs(): number {
+  return configuredDurationMs(process.env.CODEX_STARTUP_TIMEOUT_MS, DEFAULT_CODEX_STARTUP_TIMEOUT_MS);
 }
 
 function codexGenerationTimeoutMs(): number {
@@ -257,6 +271,7 @@ function runCodex({
   // large schema-constrained JSON response. Treating that silence as inactivity
   // aborts healthy work, so generation relies on the request's hard deadline.
   const idleTimeoutMs = codexStage === "research" ? codexIdleTimeoutMs() : null;
+  const startupTimeoutMs = codexStage === "research" ? codexStartupTimeoutMs() : null;
   const args = [
     "exec",
     "--json",
@@ -305,6 +320,7 @@ function runCodex({
     let latestWebSearchQuery: string | null = null;
     let codexErrorMessage = "";
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let meaningfulProgressObserved = codexStage !== "research";
 
     const updateProgress = (
       step: number,
@@ -355,6 +371,7 @@ function runCodex({
         webSearchCount,
         reasoningItemCount,
         latestWebSearchQuery,
+        meaningfulProgressObserved,
       };
       if (error) {
         logAnalysisStep(
@@ -394,9 +411,12 @@ function runCodex({
     const resetIdleTimer = () => {
       if (idleTimeoutMs === null) return;
       if (idleTimer) clearTimeout(idleTimer);
+      const activeTimeoutMs = meaningfulProgressObserved
+        ? idleTimeoutMs
+        : (startupTimeoutMs ?? idleTimeoutMs);
       idleTimer = setTimeout(() => {
-        terminate(new CodexIdleTimeoutError(idleTimeoutMs, codexStage));
-      }, idleTimeoutMs);
+        terminate(new CodexIdleTimeoutError(activeTimeoutMs, codexStage, !meaningfulProgressObserved));
+      }, activeTimeoutMs);
       idleTimer.unref();
     };
 
@@ -442,6 +462,16 @@ function runCodex({
       if (eventType === "turn.failed" && isRecord(event.error) && typeof event.error.message === "string") {
         handleTerminalEvent(eventType, event.error.message);
         return;
+      }
+
+      if (
+        codexStage === "research"
+        && !meaningfulProgressObserved
+        && item
+        && (eventType === "item.started" || eventType === "item.completed")
+      ) {
+        meaningfulProgressObserved = true;
+        resetIdleTimer();
       }
 
       if (eventType === "thread.started") {
@@ -553,6 +583,7 @@ function runCodex({
         reasoningItemCount,
         latestWebSearchQuery,
         lastEventType,
+        meaningfulProgressObserved,
         msSinceLastOutput: Date.now() - lastOutputAt,
         stderrTail: stderr.trim() ? sanitizeCodexErrorMessage(stderr.trim().slice(-1_000)) : null,
       });
@@ -567,6 +598,7 @@ function runCodex({
       timeoutMs,
       overallTimeoutMs,
       idleTimeoutMs,
+      startupTimeoutMs,
       reasoningEffort,
       webSearch: codexStage === "research" ? "live" : "disabled",
       schemaPath,
@@ -578,6 +610,7 @@ function runCodex({
       timeoutMs,
       overallTimeoutMs,
       idleTimeoutMs,
+      startupTimeoutMs,
       reasoningEffort,
       webSearch: codexStage === "research" ? "live" : "disabled",
     });
@@ -800,6 +833,7 @@ SCENARIO AND VALUATION RULES
       requestStartedAt: requestStartedAt.toISOString(),
       overallTimeoutMs,
       idleTimeoutMs: codexIdleTimeoutMs(),
+      startupTimeoutMs: codexStartupTimeoutMs(),
       researchSchemaPath,
       scenarioSchemaPath,
       generationTimeoutMs: codexGenerationTimeoutMs(),
@@ -832,17 +866,45 @@ SCENARIO AND VALUATION RULES
         }, "completed");
       } else {
         phase = "research-evidence";
-        const evidenceOutput = await runCodex({
-          prompt: attemptResearchPrompt,
-          ticker,
-          requestId,
-          researchAttempt: attempt,
-          codexStage: "research",
-          schemaPath: researchSchemaPath,
-          timeoutMs: remainingTime("research"),
-          overallTimeoutMs,
-          signal,
-        });
+        let evidenceOutput: string | undefined;
+        for (
+          let processAttempt = 1;
+          processAttempt <= MAX_RESEARCH_PROCESS_ATTEMPTS;
+          processAttempt += 1
+        ) {
+          try {
+            evidenceOutput = await runCodex({
+              prompt: attemptResearchPrompt,
+              ticker,
+              requestId,
+              researchAttempt: attempt,
+              codexStage: "research",
+              schemaPath: researchSchemaPath,
+              timeoutMs: remainingTime("research"),
+              overallTimeoutMs,
+              signal,
+            });
+            break;
+          } catch (error) {
+            if (
+              !(error instanceof CodexIdleTimeoutError)
+              || !error.beforeProgress
+              || processAttempt === MAX_RESEARCH_PROCESS_ATTEMPTS
+            ) {
+              throw error;
+            }
+            phase = "retry-stalled-research";
+            logAnalysisStep(requestId, ticker, 3, phase, "restart research after the Codex turn stalled before producing evidence", {
+              researchAttempt: attempt,
+              researchProcessAttempt: processAttempt,
+              nextResearchProcessAttempt: processAttempt + 1,
+              startupTimeoutMs: error.idleTimeoutMs,
+            }, "retrying");
+            remainingTime("research");
+            phase = "research-evidence";
+          }
+        }
+        if (evidenceOutput === undefined) throw new Error("Research process attempts completed without output");
         evidenceDossier = JSON.parse(evidenceOutput) as unknown;
       }
       if (!isRecord(evidenceDossier)) throw new Error("Codex returned an invalid evidence dossier");
@@ -1080,10 +1142,17 @@ SCENARIO AND VALUATION RULES
       );
     }
     if (error instanceof CodexIdleTimeoutError) {
-      logAnalysisStep(requestId, ticker, error.codexStage === "research" ? 4 : 5, phase, "Codex stage exceeded the inactivity limit", {
+      const failedStep = error.codexStage === "research" && error.beforeProgress
+        ? 3
+        : error.codexStage === "research" ? 4 : 5;
+      const failedDescription = error.beforeProgress
+        ? "Codex stage failed to make meaningful startup progress"
+        : "Codex stage exceeded the inactivity limit";
+      logAnalysisStep(requestId, ticker, failedStep, phase, failedDescription, {
         elapsedMs: Date.now() - requestStartedAt.getTime(),
         codexStage: error.codexStage,
         idleTimeoutMs: error.idleTimeoutMs,
+        beforeProgress: error.beforeProgress,
       }, "failed");
       console.error("Codex stage became inactive", {
         requestId,
@@ -1092,12 +1161,14 @@ SCENARIO AND VALUATION RULES
         codexStage: error.codexStage,
         elapsedMs: Date.now() - requestStartedAt.getTime(),
         idleTimeoutMs: error.idleTimeoutMs,
+        beforeProgress: error.beforeProgress,
       });
       const stageLabel = error.codexStage === "research" ? "Research" : "Scenario generation";
+      const errorMessage = error.beforeProgress
+        ? `${stageLabel} for ${ticker} did not begin producing evidence within ${Math.round(error.idleTimeoutMs / 60_000)} minutes after an automatic retry. Please retry.`
+        : `${stageLabel} for ${ticker} stopped after ${Math.round(error.idleTimeoutMs / 60_000)} minutes without progress. Please retry.`;
       return Response.json(
-        {
-          error: `${stageLabel} for ${ticker} stopped after ${Math.round(error.idleTimeoutMs / 60_000)} minutes without progress. Please retry.`,
-        },
+        { error: errorMessage },
         { status: 504 },
       );
     }

@@ -85,6 +85,7 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /CODEX_IDLE_TIMEOUT_MS/);
   assert.match(route, /DEFAULT_CODEX_TIMEOUT_MS = 1_500_000/);
   assert.match(route, /DEFAULT_CODEX_IDLE_TIMEOUT_MS = 480_000/);
+  assert.match(route, /DEFAULT_CODEX_STARTUP_TIMEOUT_MS = 120_000/);
   assert.match(route, /DEFAULT_CODEX_GENERATION_TIMEOUT_MS = 600_000/);
   assert.match(route, /codexStage === "research" \? codexIdleTimeoutMs\(\) : null/);
   assert.match(route, /CODEX_GENERATION_REASONING_EFFORT/);
@@ -94,6 +95,8 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /stock-research\.schema\.json/);
   assert.match(route, /stock-scenario-generation\.schema\.json/);
   assert.match(route, /MAX_GENERATION_ATTEMPTS = 2/);
+  assert.match(route, /MAX_RESEARCH_PROCESS_ATTEMPTS = 2/);
+  assert.match(route, /retry-stalled-research/);
   assert.match(route, /retry-scenario-generation/);
   assert.match(route, /composeAnalysis/);
   assert.match(route, /loadRecentResearchDossierCheckpoint/);
@@ -172,6 +175,7 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /claimName: possible-analysis-history/);
   assert.match(deployment, /CODEX_TIMEOUT_MS\s+value: "1500000"/);
   assert.match(deployment, /CODEX_IDLE_TIMEOUT_MS\s+value: "480000"/);
+  assert.match(deployment, /CODEX_STARTUP_TIMEOUT_MS\s+value: "120000"/);
   assert.match(deployment, /CODEX_GENERATION_TIMEOUT_MS\s+value: "600000"/);
   assert.match(deployment, /CODEX_GENERATION_REASONING_EFFORT\s+value: none/);
   assert.match(deployment, /STOCK_RESEARCH_SCHEMA_PATH/);
