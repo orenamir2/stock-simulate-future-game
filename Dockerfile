@@ -29,6 +29,7 @@ ENV NODE_ENV=production \
     CODEX_GENERATION_REASONING_EFFORT=minimal \
     CODEX_TIMEOUT_MS=1500000 \
     CODEX_IDLE_TIMEOUT_MS=480000 \
+    CODEX_STARTUP_TIMEOUT_MS=120000 \
     CODEX_GENERATION_TIMEOUT_MS=600000 \
     STOCK_RESEARCH_SCHEMA_PATH=/app/config/stock-research.schema.json \
     STOCK_SCENARIO_SCHEMA_PATH=/app/config/stock-scenario-generation.schema.json \
