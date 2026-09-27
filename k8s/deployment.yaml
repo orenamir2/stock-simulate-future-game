@@ -47,14 +47,16 @@ spec:
               value: "3000"
             - name: CODEX_HOME
               value: /var/lib/codex
-            - name: STOCK_ANALYSIS_SCHEMA_PATH
-              value: /app/config/stock-analysis.schema.json
+            - name: STOCK_SCENARIO_SCHEMA_PATH
+              value: /app/config/stock-scenario-generation.schema.json
             - name: STOCK_RESEARCH_SCHEMA_PATH
               value: /app/config/stock-research.schema.json
             - name: CODEX_TIMEOUT_MS
               value: "1500000"
             - name: CODEX_IDLE_TIMEOUT_MS
               value: "480000"
+            - name: CODEX_GENERATION_TIMEOUT_MS
+              value: "600000"
             - name: CODEX_REASONING_EFFORT
               value: low
             - name: CODEX_GENERATION_REASONING_EFFORT

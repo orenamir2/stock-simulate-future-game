@@ -30,17 +30,19 @@ test("server-renders the scenario product", async () => {
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, historyRoute, emailRoute, emailModule, historyStore, engine, framework, schema, researchSchema, supervisor, layout, packageJson] = await Promise.all([
+  const [page, route, historyRoute, emailRoute, emailModule, historyStore, dossierStore, engine, framework, schema, researchSchema, scenarioSchema, supervisor, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/history/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/email-analysis/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-email.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-history.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/research-dossier.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
     readFile(new URL("../config/stock-analysis.schema.json", import.meta.url), "utf8"),
     readFile(new URL("../config/stock-research.schema.json", import.meta.url), "utf8"),
+    readFile(new URL("../config/stock-scenario-generation.schema.json", import.meta.url), "utf8"),
     readFile(new URL("../lib/codex-supervisor.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -57,6 +59,7 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(emailModule, /createAnalysisReportPdf/);
   assert.match(emailModule, /orenamir2@gmail\.com/);
   assert.match(historyStore, /ANALYSIS_HISTORY_DIR/);
+  assert.match(dossierStore, /research-dossiers/);
   assert.match(engine, /normalizeProbabilities/);
   assert.match(engine, /deriveScenario/);
   assert.match(engine, /addPriceBuckets/);
@@ -82,12 +85,18 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /CODEX_IDLE_TIMEOUT_MS/);
   assert.match(route, /DEFAULT_CODEX_TIMEOUT_MS = 1_500_000/);
   assert.match(route, /DEFAULT_CODEX_IDLE_TIMEOUT_MS = 480_000/);
+  assert.match(route, /DEFAULT_CODEX_GENERATION_TIMEOUT_MS = 600_000/);
   assert.match(route, /codexStage === "research" \? codexIdleTimeoutMs\(\) : null/);
   assert.match(route, /CODEX_GENERATION_REASONING_EFFORT/);
   assert.match(route, /no more than 12 focused search queries/);
   assert.match(route, /codexStage: "research"/);
   assert.match(route, /codexStage: "generation"/);
   assert.match(route, /stock-research\.schema\.json/);
+  assert.match(route, /stock-scenario-generation\.schema\.json/);
+  assert.match(route, /MAX_GENERATION_ATTEMPTS = 2/);
+  assert.match(route, /retry-scenario-generation/);
+  assert.match(route, /composeAnalysis/);
+  assert.match(route, /loadRecentResearchDossierCheckpoint/);
   assert.match(route, /web_search=.*disabled/);
   assert.match(route, /detached: process\.platform !== "win32"/);
   assert.match(supervisor, /process\.kill\.bind\(process\)/);
@@ -115,6 +124,9 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(researchSchema, /"eventCandidates"/);
   assert.match(researchSchema, /"minItems": 12/);
   assert.doesNotMatch(researchSchema, /"scenarios"/);
+  assert.match(scenarioSchema, /"scenarios"/);
+  assert.doesNotMatch(scenarioSchema, /"research"/);
+  assert.doesNotMatch(scenarioSchema, /"sources"/);
   assert.doesNotMatch(schema, /"expectedPrice"/);
   assert.doesNotMatch(route, /OPENAI_API_KEY/);
   assert.match(layout, /Possible/);
@@ -160,8 +172,10 @@ test("ships container and Kubernetes delivery guardrails", async () => {
   assert.match(deployment, /claimName: possible-analysis-history/);
   assert.match(deployment, /CODEX_TIMEOUT_MS\s+value: "1500000"/);
   assert.match(deployment, /CODEX_IDLE_TIMEOUT_MS\s+value: "480000"/);
+  assert.match(deployment, /CODEX_GENERATION_TIMEOUT_MS\s+value: "600000"/);
   assert.match(deployment, /CODEX_GENERATION_REASONING_EFFORT\s+value: none/);
   assert.match(deployment, /STOCK_RESEARCH_SCHEMA_PATH/);
+  assert.match(deployment, /STOCK_SCENARIO_SCHEMA_PATH/);
   assert.match(deployment, /kubernetes\.io\/hostname: desktop-worker2/);
   assert.match(deployment, /name: prepare-analysis-history/);
   assert.match(deployment, /chown 1000:1000 \/var\/lib\/possible\/analysis-history/);
