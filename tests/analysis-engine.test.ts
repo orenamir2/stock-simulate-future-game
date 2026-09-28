@@ -77,6 +77,20 @@ test("derives joint path weights from conditional event assumptions", () => {
   assert.equal(result.eventModelMetadata.outputProbabilityKind, "evidence-calibrated-path-probabilities");
 });
 
+test("reports the missing states in an incomplete conditional-likelihood set", () => {
+  const raw = makeRawAnalysis();
+  const incompleteConditional = structuredClone(raw.companyEvents[0].conditionalLikelihoods[0]);
+  incompleteConditional.givenStateIds = ["event-2:occurs"];
+  raw.companyEvents[0].conditionalLikelihoods.push(incompleteConditional);
+  assert.throws(
+    () => processFixture(raw),
+    (error) => error instanceof AnalysisValidationError
+      && error.details.check === "event-conditional-coverage"
+      && assert.deepEqual(error.details.missingStateIds, ["absent"]) === undefined
+      && assert.deepEqual(error.details.duplicateStateIds, []) === undefined,
+  );
+});
+
 test("aggregates identical prices after valuation while preserving paths, probability and dividends", () => {
   const raw = makeRawAnalysis();
   raw.scenarios[1].valuationInputs = structuredClone(raw.scenarios[0].valuationInputs);
