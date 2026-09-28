@@ -962,7 +962,20 @@ function validateEventModel(
     for (const [condition, group] of likelihoodGroups) {
       const stateIds = new Set(group.map(({ stateId }) => stateId));
       if (stateIds.size !== event.states.length || group.length !== event.states.length) {
-        fail(`Event ${event.id} conditional set '${condition || "unconditional"}' must cover every state exactly once`);
+        const expectedStateIds = event.states.map(({ id }) => id);
+        const observedStateIds = group.map(({ stateId }) => stateId);
+        const counts = new Map<string, number>();
+        for (const stateId of observedStateIds) counts.set(stateId, (counts.get(stateId) ?? 0) + 1);
+        fail(`Event ${event.id} conditional set '${condition || "unconditional"}' must cover every state exactly once`, {
+          check: "event-conditional-coverage",
+          eventId: event.id,
+          condition: condition || "unconditional",
+          expectedStateIds,
+          observedStateIds,
+          missingStateIds: expectedStateIds.filter((stateId) => !counts.has(stateId)),
+          duplicateStateIds: expectedStateIds.filter((stateId) => (counts.get(stateId) ?? 0) > 1),
+          unexpectedStateIds: [...counts.keys()].filter((stateId) => !expectedStateIds.includes(stateId)),
+        });
       }
       const total = group.reduce((sum, likelihood) => sum + likelihood.likelihood, 0);
       if (Math.abs(total - 1) > 1e-6) {

@@ -70,6 +70,7 @@
             "type": "array",
             "minItems": 2,
             "maxItems": 40,
+            "description": "For each distinct givenStateIds set, include exactly one row for every state of this event; each complete set must sum to 1.",
             "items": {
               "type": "object",
               "additionalProperties": false,

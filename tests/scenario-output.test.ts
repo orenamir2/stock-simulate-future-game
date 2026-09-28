@@ -46,3 +46,22 @@ test("rejects invalid top-level scenario collection sizes", () => {
     /between 1 and 20 company events/,
   );
 });
+
+test("rejects incomplete conditional-likelihood sets with actionable diagnostics", () => {
+  const payload = scenarioPayload();
+  payload.companyEvents = [{
+    id: "fy27-reset",
+    states: [{ id: "bear" }, { id: "base" }, { id: "bull" }],
+    conditionalLikelihoods: [
+      { stateId: "bear", givenStateIds: ["q1-fy27:q1-mixed"] },
+      { stateId: "base", givenStateIds: ["q1-fy27:q1-mixed"] },
+    ],
+  }];
+  assert.throws(
+    () => parseScenarioGenerationOutput(JSON.stringify(payload)),
+    (error) => error instanceof ScenarioGenerationOutputError
+      && error.details.check === "event-conditional-coverage"
+      && assert.deepEqual(error.details.missingStateIds, ["bull"]) === undefined
+      && /missing: bull/.test(error.message),
+  );
+});
