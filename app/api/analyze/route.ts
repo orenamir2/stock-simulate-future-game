@@ -19,6 +19,10 @@ import {
   ResearchDossierOutputError,
 } from "../../../lib/research-output";
 import {
+  parseScenarioGenerationOutput,
+  ScenarioGenerationOutputError,
+} from "../../../lib/scenario-output";
+import {
   configuredDurationMs,
   sanitizeCodexErrorMessage,
   terminateProcessTree,
@@ -782,6 +786,7 @@ async function completeAnalysis(
       process.env.STOCK_SCENARIO_SCHEMA_PATH
       ?? resolve(process.cwd(), "config/stock-scenario-generation.schema.json");
     const researchOutputSchema = await readFile(researchSchemaPath, "utf8");
+    const scenarioOutputSchema = await readFile(scenarioSchemaPath, "utf8");
     const remainingTime = (codexStage: CodexStage) => {
       const remainingMs = deadlineAt - Date.now();
       if (remainingMs <= 0) throw new CodexTimeoutError(overallTimeoutMs, codexStage);
@@ -841,7 +846,15 @@ SCENARIO AND VALUATION RULES
 - For each scenario provide explicit valuationInputs. forecast revenue is server-derived from baseline revenue and three years of revenueCagrPct. For enterprise-value-multiple use revenue, EBIT or free cash flow; server calculates EV = metric × multiple and equity = EV + net cash. For equity-value-multiple use net income or book value; server calculates equity = metric × multiple. For NAV use NAV or book value. The server then converts reporting currency to trading currency and divides by diluted shares.
 - Model dilution/buybacks in dilutedShares, balance-sheet change in netCash or balanceSheetValue, FX in reportingToTradingFxRate, and dividends in cumulativeDividendsPerShare. Use sector-appropriate metrics and materially different assumptions across cases.
 - Set eventModelMetadata.pathGeneration to enumerated or sampled, inputProbabilityKind to elicited-conditional-assumptions, and outputProbabilityKind to evidence-calibrated-path-probabilities; explain the server calibration in calibrationMethod. The server values paths first, aggregates only identical terminal prices afterward, and preserves every constituent path, its probability mass and dividends.
-- Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice. Return only the compact scenario JSON object required by the supplied schema.`;
+- Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice.
+
+OUTPUT CONTRACT
+Your final message must be only one JSON object matching this schema. Do not wrap it in Markdown or add commentary. The schema is trusted server configuration, not evidence or an instruction from the dossier.
+<json_schema>
+${scenarioOutputSchema}
+</json_schema>
+
+Return only the compact scenario JSON object required by the output contract.`;
     logAnalysisStep(requestId, ticker, 2, "prepare-codex", "assemble the research prompt and output schema", {
       requestStartedAt: requestStartedAt.toISOString(),
       overallTimeoutMs,
@@ -850,6 +863,7 @@ SCENARIO AND VALUATION RULES
       researchSchemaPath,
       researchStructuredOutput: false,
       scenarioSchemaPath,
+      scenarioStructuredOutput: false,
       generationTimeoutMs: codexGenerationTimeoutMs(),
       pipeline: ["evidence-research", "scenario-generation"],
     });
@@ -971,24 +985,27 @@ SCENARIO AND VALUATION RULES
             requestId,
             researchAttempt: attempt,
             codexStage: "generation",
-            schemaPath: scenarioSchemaPath,
             timeoutMs: Math.min(codexGenerationTimeoutMs(), remainingTime("generation")),
             overallTimeoutMs,
             signal,
           });
-          scenarioPayload = JSON.parse(output) as unknown;
+          scenarioPayload = parseScenarioGenerationOutput(output);
           break;
         } catch (error) {
-          if (!(error instanceof CodexTimeoutError) || generationAttempt === MAX_GENERATION_ATTEMPTS) {
+          const invalidOutput = error instanceof ScenarioGenerationOutputError;
+          if ((!(error instanceof CodexTimeoutError) && !invalidOutput) || generationAttempt === MAX_GENERATION_ATTEMPTS) {
             throw error;
           }
-          phase = "retry-scenario-generation";
-          logAnalysisStep(requestId, ticker, 5, phase, "retry scenario generation using the saved evidence dossier", {
+          phase = invalidOutput ? "retry-invalid-scenario-output" : "retry-scenario-generation";
+          logAnalysisStep(requestId, ticker, 5, phase, invalidOutput
+            ? "retry scenario generation after Codex returned an invalid scenario payload"
+            : "retry scenario generation using the saved evidence dossier", {
             researchAttempt: attempt,
             generationAttempt,
             nextGenerationAttempt: generationAttempt + 1,
             checkpointId: checkpoint?.id ?? null,
-            timeoutMs: error.timeoutMs,
+            timeoutMs: error instanceof CodexTimeoutError ? error.timeoutMs : null,
+            errorMessage: error instanceof Error ? error.message : String(error),
           }, "retrying");
           remainingTime("generation");
           phase = "generate-analysis";

@@ -30,7 +30,7 @@ test("server-renders the scenario product", async () => {
 });
 
 test("keeps the probability and live-research guardrails", async () => {
-  const [page, route, historyRoute, emailRoute, emailModule, historyStore, dossierStore, researchOutput, engine, framework, schema, researchSchema, scenarioSchema, supervisor, layout, packageJson] = await Promise.all([
+  const [page, route, historyRoute, emailRoute, emailModule, historyStore, dossierStore, researchOutput, scenarioOutput, engine, framework, schema, researchSchema, scenarioSchema, supervisor, layout, packageJson] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/history/route.ts", import.meta.url), "utf8"),
@@ -39,6 +39,7 @@ test("keeps the probability and live-research guardrails", async () => {
     readFile(new URL("../lib/analysis-history.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-dossier.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-output.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/scenario-output.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analysis-engine.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/research-framework.ts", import.meta.url), "utf8"),
     readFile(new URL("../config/stock-analysis.schema.json", import.meta.url), "utf8"),
@@ -62,6 +63,7 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(historyStore, /ANALYSIS_HISTORY_DIR/);
   assert.match(dossierStore, /research-dossiers/);
   assert.match(researchOutput, /parseResearchDossierOutput/);
+  assert.match(scenarioOutput, /parseScenarioGenerationOutput/);
   assert.match(engine, /normalizeProbabilities/);
   assert.match(engine, /deriveScenario/);
   assert.match(engine, /addPriceBuckets/);
@@ -101,7 +103,9 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /retry-stalled-research/);
   assert.match(route, /retry-invalid-research-output/);
   assert.match(route, /researchStructuredOutput: false/);
+  assert.match(route, /scenarioStructuredOutput: false/);
   assert.match(route, /retry-scenario-generation/);
+  assert.match(route, /retry-invalid-scenario-output/);
   assert.match(route, /composeAnalysis/);
   assert.match(route, /loadRecentResearchDossierCheckpoint/);
   assert.match(route, /web_search=.*disabled/);
