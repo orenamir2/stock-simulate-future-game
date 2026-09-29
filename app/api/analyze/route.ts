@@ -254,6 +254,10 @@ function isMinimumResearchCoverageError(error: unknown): error is AnalysisValida
   return error instanceof AnalysisValidationError && error.details.check === "minimum-research-coverage";
 }
 
+function isScenarioGenerationValidationError(error: unknown): error is AnalysisValidationError {
+  return error instanceof AnalysisValidationError && error.details.scope === "scenario-generation";
+}
+
 function runCodex({
   prompt,
   ticker,
@@ -848,7 +852,7 @@ SCENARIO AND VALUATION RULES
 - Set eventModelMetadata.pathGeneration to enumerated or sampled, inputProbabilityKind to elicited-conditional-assumptions, and outputProbabilityKind to evidence-calibrated-path-probabilities; explain the server calibration in calibrationMethod. The server values paths first, aggregates only identical terminal prices afterward, and preserves every constituent path, its probability mass and dividends.
 - Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice.
 
-${retryCorrection ? `RETRY CORRECTION\nThe previous scenario payload failed server validation: ${retryCorrection}\nRebuild the complete payload and explicitly audit every conditional-likelihood set before returning it.\n` : ""}
+${retryCorrection ? `RETRY CORRECTION\nThe previous scenario payload failed server validation: ${retryCorrection}\nRebuild the complete payload. Explicitly audit every event prerequisite, selected prerequisite state, event date, state incompatibility, conditional-likelihood set, and unique path before returning it.\n` : ""}
 
 OUTPUT CONTRACT
 Your final message must be only one JSON object matching this schema. Do not wrap it in Markdown or add commentary. The schema is trusted server configuration, not evidence or an instruction from the dossier.
@@ -978,80 +982,96 @@ Return only the compact scenario JSON object required by the output contract.`;
         eventCandidateCount: Array.isArray(evidenceDossier.eventCandidates) ? evidenceDossier.eventCandidates.length : null,
       }, "completed");
       phase = "generate-analysis";
-      let scenarioPayload: unknown;
       let generationRetryCorrection = "";
-      for (let generationAttempt = 1; generationAttempt <= MAX_GENERATION_ATTEMPTS; generationAttempt += 1) {
-        try {
-          const output = await runCodex({
-            prompt: generationPromptFor(evidenceDossier, generationRetryCorrection),
-            ticker,
-            requestId,
-            researchAttempt: attempt,
-            codexStage: "generation",
-            timeoutMs: Math.min(codexGenerationTimeoutMs(), remainingTime("generation")),
-            overallTimeoutMs,
-            signal,
-          });
-          scenarioPayload = parseScenarioGenerationOutput(output);
-          break;
-        } catch (error) {
-          const invalidOutput = error instanceof ScenarioGenerationOutputError;
-          if ((!(error instanceof CodexTimeoutError) && !invalidOutput) || generationAttempt === MAX_GENERATION_ATTEMPTS) {
-            throw error;
-          }
-          phase = invalidOutput ? "retry-invalid-scenario-output" : "retry-scenario-generation";
-          if (invalidOutput) generationRetryCorrection = error.message;
-          logAnalysisStep(requestId, ticker, 5, phase, invalidOutput
-            ? "retry scenario generation after Codex returned an invalid scenario payload"
-            : "retry scenario generation using the saved evidence dossier", {
-            researchAttempt: attempt,
-            generationAttempt,
-            nextGenerationAttempt: generationAttempt + 1,
-            checkpointId: checkpoint?.id ?? null,
-            timeoutMs: error instanceof CodexTimeoutError ? error.timeoutMs : null,
-            errorMessage: error instanceof Error ? error.message : String(error),
-            validationDetails: invalidOutput ? error.details : {},
-          }, "retrying");
-          remainingTime("generation");
-          phase = "generate-analysis";
-        }
-      }
-      if (scenarioPayload === undefined) throw new Error("Scenario generation attempts completed without output");
-      phase = "parse-codex-output";
-      logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times", {
-        researchAttempt: attempt,
-      });
-      const raw = composeAnalysis(evidenceDossier, scenarioPayload);
-      validationNow = new Date();
-      const stamped = stampSourceAccessTimes(raw, validationNow);
-      const outputSummary = summarizeAnalysisOutput(stamped.value);
-      console.info("Analysis source access timestamps stamped", {
-        requestId,
-        ticker,
-        researchAttempt: attempt,
-        ...stamped.diagnostics,
-      });
-      logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times", {
-        researchAttempt: attempt,
-        ...stamped.diagnostics,
-        ...outputSummary,
-      }, "completed");
-      phase = "validate-analysis";
-      logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
-        validationNow: validationNow.toISOString(),
-        researchAttempt: attempt,
-        ...outputSummary,
-      });
       try {
-        data = processAnalysis(stamped.value, ticker, validationNow);
-        logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
-          validationNow: validationNow.toISOString(),
-          researchAttempt: attempt,
-          retainedSourceCount: data.sources.length,
-          retainedScenarioCount: data.scenarios.length,
-          confidence: data.confidence,
-          ...outputSummary,
-        }, "completed");
+        for (let generationAttempt = 1; generationAttempt <= MAX_GENERATION_ATTEMPTS; generationAttempt += 1) {
+          try {
+            const output = await runCodex({
+              prompt: generationPromptFor(evidenceDossier, generationRetryCorrection),
+              ticker,
+              requestId,
+              researchAttempt: attempt,
+              codexStage: "generation",
+              timeoutMs: Math.min(codexGenerationTimeoutMs(), remainingTime("generation")),
+              overallTimeoutMs,
+              signal,
+            });
+            const scenarioPayload = parseScenarioGenerationOutput(output);
+            phase = "parse-codex-output";
+            logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times", {
+              researchAttempt: attempt,
+              generationAttempt,
+            });
+            const raw = composeAnalysis(evidenceDossier, scenarioPayload);
+            validationNow = new Date();
+            const stamped = stampSourceAccessTimes(raw, validationNow);
+            const outputSummary = summarizeAnalysisOutput(stamped.value);
+            console.info("Analysis source access timestamps stamped", {
+              requestId,
+              ticker,
+              researchAttempt: attempt,
+              generationAttempt,
+              ...stamped.diagnostics,
+            });
+            logAnalysisStep(requestId, ticker, 6, phase, "parse the model output and stamp authoritative source access times", {
+              researchAttempt: attempt,
+              generationAttempt,
+              ...stamped.diagnostics,
+              ...outputSummary,
+            }, "completed");
+            phase = "validate-analysis";
+            logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
+              validationNow: validationNow.toISOString(),
+              researchAttempt: attempt,
+              generationAttempt,
+              ...outputSummary,
+            });
+            data = processAnalysis(stamped.value, ticker, validationNow);
+            logAnalysisStep(requestId, ticker, 7, phase, "validate evidence and calculate probabilities, valuations, and returns", {
+              validationNow: validationNow.toISOString(),
+              researchAttempt: attempt,
+              generationAttempt,
+              retainedSourceCount: data.sources.length,
+              retainedScenarioCount: data.scenarios.length,
+              confidence: data.confidence,
+              ...outputSummary,
+            }, "completed");
+            break;
+          } catch (error) {
+            const invalidOutput = error instanceof ScenarioGenerationOutputError;
+            const invalidGeneratedAnalysis = isScenarioGenerationValidationError(error);
+            const retryable = error instanceof CodexTimeoutError || invalidOutput || invalidGeneratedAnalysis;
+            if (!retryable || generationAttempt === MAX_GENERATION_ATTEMPTS) throw error;
+            phase = invalidGeneratedAnalysis
+              ? "retry-invalid-generated-analysis"
+              : invalidOutput ? "retry-invalid-scenario-output" : "retry-scenario-generation";
+            if (invalidOutput || invalidGeneratedAnalysis) generationRetryCorrection = error.message;
+            logAnalysisStep(
+              requestId,
+              ticker,
+              invalidGeneratedAnalysis ? 7 : 5,
+              phase,
+              invalidGeneratedAnalysis
+                ? "retry scenario generation after the full event-model validation failed"
+                : invalidOutput
+                  ? "retry scenario generation after Codex returned an invalid scenario payload"
+                  : "retry scenario generation using the saved evidence dossier",
+              {
+                researchAttempt: attempt,
+                generationAttempt,
+                nextGenerationAttempt: generationAttempt + 1,
+                checkpointId: checkpoint?.id ?? null,
+                timeoutMs: error instanceof CodexTimeoutError ? error.timeoutMs : null,
+                errorMessage: error instanceof Error ? error.message : String(error),
+                validationDetails: invalidOutput || invalidGeneratedAnalysis ? error.details : {},
+              },
+              "retrying",
+            );
+            remainingTime("generation");
+            phase = "generate-analysis";
+          }
+        }
+        if (!data) throw new Error("Scenario generation attempts completed without a validated analysis");
         break;
       } catch (error) {
         if (!isMinimumResearchCoverageError(error) || attempt === MAX_RESEARCH_ATTEMPTS) throw error;

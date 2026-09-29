@@ -126,7 +126,31 @@ test("requires regulatory approval to occur before commercial sales", () => {
   }
   assert.doesNotThrow(() => processFixture(structuredClone(raw)));
   raw.scenarios[16].eventPath[4].occursOn = "2026-03-01";
-  assert.throws(() => processFixture(raw), /before required event/);
+  assert.throws(() => processFixture(raw), (error) => {
+    assert.ok(error instanceof AnalysisValidationError);
+    assert.match(error.message, /before required event/);
+    assert.equal(error.details.scope, "scenario-generation");
+    assert.equal(error.details.check, "event-prerequisite-chronology");
+    assert.equal(error.details.eventId, "event-5");
+    assert.equal(error.details.prerequisiteId, "event-4");
+    assert.equal(error.details.eventOccursOn, "2026-03-01");
+    assert.equal(error.details.prerequisiteOccursOn, "2026-04-01");
+    return true;
+  });
+});
+
+test("reports a required event selected in a non-occurring state", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[4].prerequisiteIds = [raw.companyEvents[3].id];
+  assert.throws(() => processFixture(raw), (error) => {
+    assert.ok(error instanceof AnalysisValidationError);
+    assert.match(error.message, /without required event/);
+    assert.equal(error.details.scope, "scenario-generation");
+    assert.equal(error.details.check, "event-prerequisite-outcome");
+    assert.equal(error.details.prerequisiteStateId, "absent");
+    assert.equal(error.details.prerequisiteOutcome, "does-not-occur");
+    return true;
+  });
 });
 
 test("rejects incompatible export prohibition and unrestricted-sales states", () => {
