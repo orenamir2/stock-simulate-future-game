@@ -106,8 +106,11 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /scenarioStructuredOutput: false/);
   assert.match(route, /retry-scenario-generation/);
   assert.match(route, /retry-invalid-scenario-output/);
+  assert.match(route, /retry-invalid-generated-analysis/);
+  assert.match(route, /isScenarioGenerationValidationError/);
   assert.match(route, /generationRetryCorrection/);
-  assert.match(route, /validationDetails: invalidOutput \? error\.details/);
+  assert.match(route, /invalidOutput \|\| invalidGeneratedAnalysis \? error\.details/);
+  assert.match(route, /Explicitly audit every event prerequisite/);
   assert.match(route, /For every distinct givenStateIds conditioning set/);
   assert.match(route, /composeAnalysis/);
   assert.match(route, /loadRecentResearchDossierCheckpoint/);

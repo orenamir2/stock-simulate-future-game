@@ -1051,8 +1051,31 @@ function validateEventModel(
           const prerequisiteSelection = selections.get(prerequisiteId)!;
           const prerequisiteEvent = eventMap.get(prerequisiteId)!;
           const prerequisiteState = prerequisiteEvent.states.find(({ id }) => id === prerequisiteSelection.stateId)!;
-          if (prerequisiteState.outcome !== "occurs" || prerequisiteSelection.occursOn > selection.occursOn) {
-            fail(`${scenario.name} has ${event.id} before required event ${prerequisiteId}`);
+          if (prerequisiteState.outcome !== "occurs") {
+            fail(`${scenario.name} selects ${event.id} without required event ${prerequisiteId}`, {
+              check: "event-prerequisite-outcome",
+              scenarioName: scenario.name,
+              eventId: event.id,
+              eventStateId: state.id,
+              eventOccursOn: selection.occursOn,
+              prerequisiteId,
+              prerequisiteStateId: prerequisiteState.id,
+              prerequisiteOutcome: prerequisiteState.outcome,
+              prerequisiteOccursOn: prerequisiteSelection.occursOn,
+            });
+          }
+          if (prerequisiteSelection.occursOn > selection.occursOn) {
+            fail(`${scenario.name} has ${event.id} before required event ${prerequisiteId}`, {
+              check: "event-prerequisite-chronology",
+              scenarioName: scenario.name,
+              eventId: event.id,
+              eventStateId: state.id,
+              eventOccursOn: selection.occursOn,
+              prerequisiteId,
+              prerequisiteStateId: prerequisiteState.id,
+              prerequisiteOutcome: prerequisiteState.outcome,
+              prerequisiteOccursOn: prerequisiteSelection.occursOn,
+            });
           }
         }
       }
@@ -1227,7 +1250,16 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     if (!sourceIds.has(id)) fail("Instrument metadata references an unknown source ID");
   }
   auditReferences(raw.baseline.sourceIds, sourceIds, "baseline");
-  const resolvedEventPaths = validateEventModel(raw.companyEvents, raw.scenarios, sourceIds);
+  let resolvedEventPaths: Map<RawScenario, ResolvedEventPath>;
+  try {
+    resolvedEventPaths = validateEventModel(raw.companyEvents, raw.scenarios, sourceIds);
+  } catch (error) {
+    if (!(error instanceof AnalysisValidationError)) throw error;
+    throw new AnalysisValidationError(error.message, {
+      ...error.details,
+      scope: "scenario-generation",
+    });
+  }
   for (const scenario of raw.scenarios) {
     scenario.relativeLikelihood = resolvedEventPaths.get(scenario)?.jointLikelihood ?? scenario.relativeLikelihood;
   }
