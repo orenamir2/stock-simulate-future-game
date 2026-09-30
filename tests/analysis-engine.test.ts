@@ -351,11 +351,48 @@ test("rejects analyses with effectively empty research", () => {
   );
 });
 
-test("rejects duplicate joint event paths", () => {
+test("discards repeated event-state paths without double-counting their probability", () => {
   const raw = makeRawAnalysis();
   raw.scenarios[1].eventPath = structuredClone(raw.scenarios[0].eventPath);
-  assert.throws(
-    () => processFixture(raw),
-    /duplicates an existing company event path/,
-  );
+  raw.scenarios[1].relativeLikelihood = 999;
+  const result = processFixture(raw);
+  const paths = result.scenarios.flatMap(({ constituentPaths }) => constituentPaths);
+  assert.equal(paths.length, 19);
+  assert.ok(paths.some(({ name }) => name === "Scenario 1"));
+  assert.ok(!paths.some(({ name }) => name === "Scenario 2"));
+  assert.equal(result.scenarios.reduce((sum, scenario) => sum + scenario.probability, 0), 100);
+  // All fixture event likelihoods are equal, so the repeated path gets no extra mass.
+  assert.ok(Math.max(...paths.map(({ probability }) => probability))
+    - Math.min(...paths.map(({ probability }) => probability)) <= 0.1 + 1e-9);
+});
+
+test("deduplicates state selections despite different dates and event order", () => {
+  const raw = makeRawAnalysis();
+  raw.scenarios[1].eventPath = structuredClone(raw.scenarios[0].eventPath)
+    .reverse().map((selection) => ({ ...selection, occursOn: "2026-06-01" }));
+  const paths = processFixture(raw).scenarios.flatMap(({ constituentPaths }) => constituentPaths);
+  assert.equal(paths.length, 19);
+  assert.ok(!paths.some(({ name }) => name === "Scenario 2"));
+});
+
+test("requests regeneration when duplicate recovery leaves too few distinct paths", () => {
+  const raw = makeRawAnalysis();
+  for (const scenario of raw.scenarios.slice(9)) {
+    scenario.eventPath = structuredClone(raw.scenarios[0].eventPath);
+  }
+  assert.throws(() => processFixture(raw), (error) => error instanceof AnalysisValidationError
+    && error.details.check === "minimum-distinct-scenarios"
+    && error.details.scope === "scenario-generation"
+    && error.details.scenarioCount === 9);
+});
+
+test("keeps a usable duplicate when the first representative has an invalid valuation", () => {
+  const raw = makeRawAnalysis();
+  raw.scenarios[1].eventPath = structuredClone(raw.scenarios[0].eventPath);
+  raw.scenarios[0].valuationInputs.kind = "enterprise-value-multiple";
+  raw.scenarios[0].valuationInputs.metric = "net-income";
+  const paths = processFixture(raw).scenarios.flatMap(({ constituentPaths }) => constituentPaths);
+  assert.equal(paths.length, 19);
+  assert.ok(paths.some(({ name }) => name === "Scenario 2"));
+  assert.ok(!paths.some(({ name }) => name === "Scenario 1"));
 });

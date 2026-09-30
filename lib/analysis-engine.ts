@@ -1020,7 +1020,6 @@ function validateEventModel(
   for (const event of events) visit(event.id);
 
   const resolved = new Map<RawScenario, ResolvedEventPath>();
-  const seenPaths = new Set<string>();
   for (const scenario of scenarios) {
     const selections = new Map(scenario.eventPath.map((selection) => [selection.eventId, selection]));
     if (selections.size !== scenario.eventPath.length || selections.size !== events.length) {
@@ -1037,9 +1036,6 @@ function validateEventModel(
       }
       selectedRefs.add(`${event.id}:${state.id}`);
     }
-    const signature = [...selectedRefs].sort().join("|");
-    if (seenPaths.has(signature)) fail(`${scenario.name} duplicates an existing company event path`);
-    seenPaths.add(signature);
 
     const impacts = new Map<string, number>();
     let jointLikelihood = 1;
@@ -1117,40 +1113,27 @@ function validateEventModel(
   return resolved;
 }
 
-function mergeScenarioPair(existing: RawScenario, incoming: RawScenario): RawScenario {
-  const representative = incoming.relativeLikelihood > existing.relativeLikelihood ? incoming : existing;
-  return {
-    ...representative,
-    relativeLikelihood: existing.relativeLikelihood + incoming.relativeLikelihood,
-    keyDrivers: [...new Set([...representative.keyDrivers, ...existing.keyDrivers, ...incoming.keyDrivers])].slice(0, 5),
-    sourceIds: [...new Set([...representative.sourceIds, ...existing.sourceIds, ...incoming.sourceIds])].slice(0, 8),
-  };
-}
-
-function mergeDuplicateScenarios(scenarios: RawScenario[]): { scenarios: RawScenario[]; mergedCount: number } {
+function discardDuplicateEventPaths(scenarios: RawScenario[]): { scenarios: RawScenario[]; droppedCount: number } {
   const retained: RawScenario[] = [];
-  const merges: Array<{ retained: string; merged: string; reason: "name" | "factor-states" }> = [];
+  const seen = new Map<string, string>();
+  const dropped: Array<{ scenario: string; retained: string }> = [];
   for (const scenario of scenarios) {
-    const vector = JSON.stringify([...scenario.eventPath].sort((a, b) => a.eventId.localeCompare(b.eventId)));
-    const duplicateIndex = retained.findIndex((candidate) =>
-      JSON.stringify([...candidate.eventPath].sort((a, b) => a.eventId.localeCompare(b.eventId))) === vector
-    );
-    if (duplicateIndex < 0) {
-      retained.push(scenario);
+    // Dates, names and macro descriptors do not create a new event-state path.
+    const signature = JSON.stringify(scenario.eventPath
+      .map(({ eventId, stateId }) => [eventId, stateId])
+      .sort(([a], [b]) => a.localeCompare(b)));
+    const existing = seen.get(signature);
+    if (existing !== undefined) {
+      dropped.push({ scenario: scenario.name, retained: existing });
       continue;
     }
-    const duplicate = retained[duplicateIndex];
-    const reason = "factor-states";
-    const merged = mergeScenarioPair(duplicate, scenario);
-    retained[duplicateIndex] = merged;
-    merges.push({
-      retained: merged.name,
-      merged: merged.name === scenario.name ? duplicate.name : scenario.name,
-      reason,
-    });
+    seen.set(signature, scenario.name);
+    retained.push(scenario);
   }
-  if (merges.length > 0) console.warn("Merged duplicate analysis scenarios", { merges });
-  return { scenarios: retained, mergedCount: merges.length };
+  // A repeated generated path is not independent probability mass. Keep the
+  // original object so its validated likelihood and revenue impacts stay linked.
+  if (dropped.length > 0) console.warn("Discarded duplicate company event paths", { dropped });
+  return { scenarios: retained, droppedCount: dropped.length };
 }
 
 function recoverScenarioPrices(
@@ -1373,14 +1356,15 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
     console.warn("Dropped scenarios that failed evidence validation", { dropped: scenarioValidationDrops });
   }
 
-  const deduplicated = mergeDuplicateScenarios(referenceValidScenarios);
-  const priceRecovered = recoverScenarioPrices(deduplicated.scenarios, raw.baseline, raw.currentPrice);
-  if (priceRecovered.scenarios.length < MIN_RETAINED_SCENARIOS) {
+  const priceRecovered = recoverScenarioPrices(referenceValidScenarios, raw.baseline, raw.currentPrice);
+  const deduplicated = discardDuplicateEventPaths(priceRecovered.scenarios);
+  if (deduplicated.scenarios.length < MIN_RETAINED_SCENARIOS) {
     fail(
-      `Scenario analysis is degenerate: only ${priceRecovered.scenarios.length} distinct scenarios remained; at least ${MIN_RETAINED_SCENARIOS} required`,
+      `Scenario analysis is degenerate: only ${deduplicated.scenarios.length} distinct scenarios remained; at least ${MIN_RETAINED_SCENARIOS} required`,
       {
         check: "minimum-distinct-scenarios",
-        scenarioCount: priceRecovered.scenarios.length,
+        scope: "scenario-generation",
+        scenarioCount: deduplicated.scenarios.length,
         minimum: MIN_RETAINED_SCENARIOS,
       },
     );
@@ -1388,13 +1372,13 @@ export function processAnalysis(value: unknown, requestedTicker: string, now = n
   const recoveryCount =
     scenarioInputCount - raw.scenarios.length +
     scenarioValidationDrops.length +
-    deduplicated.mergedCount +
+    deduplicated.droppedCount +
     priceRecovered.droppedCount +
     priceRecovered.mergedCount;
   const evidenceConfidence = calculateConfidence(research, sources);
   const confidence = Math.round(Math.max(0, evidenceConfidence - Math.min(15, recoveryCount * 1.5)));
-  const probabilities = normalizeProbabilities(priceRecovered.scenarios, confidence);
-  const derived = priceRecovered.scenarios.map((scenario, index) => {
+  const probabilities = normalizeProbabilities(deduplicated.scenarios, confidence);
+  const derived = deduplicated.scenarios.map((scenario, index) => {
     const resolvedPath = resolvedEventPaths.get(scenario);
     if (!resolvedPath) fail(`${scenario.name} is missing a resolved event path`);
     const valued = deriveScenario(
