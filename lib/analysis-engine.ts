@@ -1032,7 +1032,14 @@ function validateEventModel(
       const state = event.states.find(({ id }) => id === selection.stateId);
       if (!state) fail(`${scenario.name} selects unknown state ${event.id}:${selection.stateId}`);
       if (selection.occursOn < event.dateWindow.earliest || selection.occursOn > event.dateWindow.latest) {
-        fail(`${scenario.name} places ${event.id} outside its date window`);
+        fail(`${scenario.name} places ${event.id} outside its date window`, {
+          check: "event-date-window",
+          scenarioName: scenario.name,
+          eventId: event.id,
+          eventStateId: selection.stateId,
+          eventOccursOn: selection.occursOn,
+          dateWindow: event.dateWindow,
+        });
       }
       selectedRefs.add(`${event.id}:${state.id}`);
     }

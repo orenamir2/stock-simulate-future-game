@@ -19,6 +19,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+export function scenarioGenerationRetryCorrection(error: {
+  message: string;
+  details: Record<string, unknown>;
+}): string {
+  return `${error.message}\nValidation details: ${JSON.stringify(error.details)}`;
+}
+
+function validateEventDates(companyEvents: unknown[], scenarios: unknown[]) {
+  const events = new Map(companyEvents.flatMap((event) =>
+    isRecord(event) && typeof event.id === "string" ? [[event.id, event] as const] : []
+  ));
+  const violations: Record<string, unknown>[] = [];
+  const isoDate = /^\d{4}-\d{2}-\d{2}$/;
+  for (const scenario of scenarios) {
+    if (!isRecord(scenario) || !Array.isArray(scenario.eventPath)) continue;
+    for (const selection of scenario.eventPath) {
+      if (!isRecord(selection) || typeof selection.eventId !== "string") continue;
+      const event = events.get(selection.eventId);
+      if (!event || !isRecord(event.dateWindow)) continue;
+      const { earliest, latest } = event.dateWindow;
+      const { occursOn } = selection;
+      // Malformed dates and windows remain the full validator's responsibility.
+      if (typeof earliest !== "string" || typeof latest !== "string" || typeof occursOn !== "string"
+        || ![earliest, latest, occursOn].every((date) => isoDate.test(date)) || earliest > latest) continue;
+      if (occursOn < earliest || occursOn > latest) {
+        violations.push({
+          scenarioName: scenario.name,
+          eventId: selection.eventId,
+          eventStateId: selection.stateId,
+          eventOccursOn: occursOn,
+          dateWindow: { earliest, latest },
+        });
+      }
+    }
+  }
+  if (violations.length > 0) {
+    throw new ScenarioGenerationOutputError(
+      `Scenario event dates fall outside their date windows (${violations.length} selections)`,
+      { check: "event-date-window", violations },
+    );
+  }
+}
+
 function jsonCandidates(output: string): string[] {
   const trimmed = output.trim();
   const candidates = [trimmed];
@@ -124,6 +167,7 @@ export function parseScenarioGenerationOutput(output: string): Record<string, un
   if (!Array.isArray(parsed.scenarios) || parsed.scenarios.length !== 20) {
     throw new ScenarioGenerationOutputError("Scenario JSON must contain exactly 20 scenarios");
   }
+  validateEventDates(parsed.companyEvents, parsed.scenarios);
   if (!Array.isArray(parsed.signals) || parsed.signals.length !== 4) {
     throw new ScenarioGenerationOutputError("Scenario JSON must contain exactly 4 signals");
   }
