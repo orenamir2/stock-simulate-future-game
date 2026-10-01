@@ -98,7 +98,10 @@ test("keeps the probability and live-research guardrails", async () => {
   assert.match(route, /codexStage: "generation"/);
   assert.match(route, /stock-research\.schema\.json/);
   assert.match(route, /stock-scenario-generation\.schema\.json/);
-  assert.match(route, /MAX_GENERATION_ATTEMPTS = 2/);
+  assert.match(route, /MAX_GENERATION_ATTEMPTS/);
+  assert.match(route, /shouldRetryScenarioGeneration/);
+  assert.match(route, /generationRetryCorrection \+=/);
+  assert.match(route, /scenarioGenerationErrorMessage\(ticker, error\)/);
   assert.match(route, /MAX_RESEARCH_PROCESS_ATTEMPTS = 2/);
   assert.match(route, /retry-stalled-research/);
   assert.match(route, /retry-invalid-research-output/);

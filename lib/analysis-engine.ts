@@ -1083,7 +1083,16 @@ function validateEventModel(
         }
       }
       for (const requiredRef of state.prerequisiteStateIds) {
-        if (!selectedRefs.has(requiredRef)) fail(`${scenario.name} requires state ${requiredRef}`);
+        if (!selectedRefs.has(requiredRef)) {
+          fail(`${scenario.name} requires state ${requiredRef}`, {
+            check: "event-prerequisite-state",
+            scenarioName: scenario.name,
+            eventId: event.id,
+            eventStateId: state.id,
+            requiredStateId: requiredRef,
+            selectedStateIds: [...selectedRefs],
+          });
+        }
       }
       for (const incompatibleRef of state.incompatibleStateIds) {
         if (selectedRefs.has(incompatibleRef)) fail(`${scenario.name} combines incompatible states ${event.id}:${state.id} and ${incompatibleRef}`);

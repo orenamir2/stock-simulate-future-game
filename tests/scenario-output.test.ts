@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseScenarioGenerationOutput,
+  scenarioGenerationErrorMessage,
   scenarioGenerationRetryCorrection,
+  shouldRetryScenarioGeneration,
   ScenarioGenerationOutputError,
 } from "../lib/scenario-output.ts";
 
@@ -80,6 +82,35 @@ test("rejects invalid top-level scenario collection sizes", () => {
     () => parseScenarioGenerationOutput(JSON.stringify({ ...scenarioPayload(), companyEvents: [] })),
     /between 1 and 20 company events/,
   );
+});
+
+test("reports the observed scenario count for correction and the user-facing failure", () => {
+  for (const scenarios of [[], scenarioPayload().scenarios as unknown[], [{}], null]) {
+    const payload = { ...scenarioPayload(), scenarios };
+    if (Array.isArray(scenarios) && scenarios.length === 20) scenarios.pop();
+    assert.throws(() => parseScenarioGenerationOutput(JSON.stringify(payload)), (error) => {
+      assert.ok(error instanceof ScenarioGenerationOutputError);
+      assert.deepEqual(error.details, {
+        check: "scenario-count", expectedCount: 20,
+        observedCount: Array.isArray(scenarios) ? scenarios.length : null,
+      });
+      assert.match(scenarioGenerationRetryCorrection(error), /expectedCount.*20/);
+      const message = scenarioGenerationErrorMessage("BBW", error);
+      assert.match(message, /Scenario generation for BBW failed validation/);
+      assert.ok(message.includes(error.message));
+      assert.doesNotMatch(message, /authentication|research failed/i);
+      return true;
+    });
+  }
+});
+
+test("allows correction of a second validation failure but keeps timeout retries bounded", () => {
+  assert.equal(shouldRetryScenarioGeneration(1, "validation"), true);
+  assert.equal(shouldRetryScenarioGeneration(2, "validation"), true);
+  assert.equal(shouldRetryScenarioGeneration(3, "validation"), false);
+  assert.equal(shouldRetryScenarioGeneration(1, "timeout"), true);
+  assert.equal(shouldRetryScenarioGeneration(2, "timeout"), false);
+  assert.equal(shouldRetryScenarioGeneration(3, "timeout"), false);
 });
 
 test("rejects incomplete conditional-likelihood sets with actionable diagnostics", () => {
