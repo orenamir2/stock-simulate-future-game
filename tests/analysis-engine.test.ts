@@ -139,6 +139,22 @@ test("requires regulatory approval to occur before commercial sales", () => {
   });
 });
 
+test("keeps strict event date validation with actionable retry diagnostics", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[4].dateWindow = { earliest: "2026-01-01", latest: "2026-12-31" };
+  raw.scenarios[0].eventPath[4].occursOn = "2027-01-01";
+  assert.throws(() => processFixture(raw), (error) => {
+    assert.ok(error instanceof AnalysisValidationError);
+    assert.equal(error.details.scope, "scenario-generation");
+    assert.equal(error.details.check, "event-date-window");
+    assert.equal(error.details.scenarioName, "Scenario 1");
+    assert.equal(error.details.eventId, "event-5");
+    assert.equal(error.details.eventOccursOn, "2027-01-01");
+    assert.deepEqual(error.details.dateWindow, raw.companyEvents[4].dateWindow);
+    return true;
+  });
+});
+
 test("reports a required event selected in a non-occurring state", () => {
   const raw = makeRawAnalysis();
   raw.companyEvents[4].prerequisiteIds = [raw.companyEvents[3].id];

@@ -20,6 +20,7 @@ import {
 } from "../../../lib/research-output";
 import {
   parseScenarioGenerationOutput,
+  scenarioGenerationRetryCorrection,
   ScenarioGenerationOutputError,
 } from "../../../lib/scenario-output";
 import {
@@ -845,6 +846,7 @@ SCENARIO AND VALUATION RULES
 - Define a companyEvents joint-event model before creating scenarios. Give every event and state a stable ID, a date window, event prerequisiteIds, state prerequisites and incompatibilities, evidence IDs, and explicit unknowns. For every distinct givenStateIds conditioning set, supply exactly one conditionalLikelihood for every state of that event; each complete set must sum to 1. An unconditional set uses an empty givenStateIds array. Label each likelihood's basis as elicited-assumption or calibrated-probability. Do not call an elicited judgment calibrated unless cited empirical evidence supports it.
 - Use event prerequisites to make commercial sales depend on any required regulatory approval. Represent export prohibitions and unrestricted sales to the affected market as incompatible states. Give overlapping commercial effects the same revenueImpacts exposureId; the server applies only the largest absolute impact for each exposure, so a launch delay, lost customer and supplier disruption can coexist without triple-counting the same revenue.
 - Create exactly 20 coherent three-year joint paths by enumerating or deliberately sampling the company event states. Each scenario must select exactly one state for every event, place it inside the event date window, and obey prerequisite chronology and state incompatibilities. Every event path must be unique by its complete set of eventId/stateId selections; changing names, dates, macro factors or valuation inputs does not create a new path. Count the distinct feasible combinations before writing scenarios and choose an evidence-supported event model with at least 20 feasible paths. Audit the 20 state-selection signatures for duplicates before returning JSON. factorStates are macro descriptors only: scenarios with the same factorStates but different product/event paths remain distinct until terminal-price aggregation.
+- Audit every eventPath selection with dateWindow.earliest <= occursOn <= dateWindow.latest, inclusive. This applies to every state, including does-not-occur: use an in-window assessment date for a non-occurring outcome. Do not substitute the three-year valuation horizon for an event's own date window. Check all 20 paths, then check prerequisite chronology again.
 - Do not return a final probability. relativeLikelihood is a required positive compatibility weight, but the server replaces it with the product of the most-specific applicable event conditionalLikelihoods, shrinks those joint weights toward equal priors according to independently derived evidence quality, then normalizes them to 100.0%. Explain the conditional assumptions in probabilityRationale.
 - Do not return price, target equity value, target enterprise value, expected price, return, type or confidence. The server derives all of them.
 - For each scenario provide explicit valuationInputs. forecast revenue is server-derived from baseline revenue and three years of revenueCagrPct. For enterprise-value-multiple use revenue, EBIT or free cash flow; server calculates EV = metric × multiple and equity = EV + net cash. For equity-value-multiple use net income or book value; server calculates equity = metric × multiple. For NAV use NAV or book value. The server then converts reporting currency to trading currency and divides by diluted shares.
@@ -1045,7 +1047,7 @@ Return only the compact scenario JSON object required by the output contract.`;
             phase = invalidGeneratedAnalysis
               ? "retry-invalid-generated-analysis"
               : invalidOutput ? "retry-invalid-scenario-output" : "retry-scenario-generation";
-            if (invalidOutput || invalidGeneratedAnalysis) generationRetryCorrection = error.message;
+            if (invalidOutput || invalidGeneratedAnalysis) generationRetryCorrection = scenarioGenerationRetryCorrection(error);
             logAnalysisStep(
               requestId,
               ticker,
