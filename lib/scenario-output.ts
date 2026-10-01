@@ -5,6 +5,18 @@ const REQUIRED_SCENARIO_FIELDS = [
   "signals",
 ] as const;
 
+export const MAX_GENERATION_ATTEMPTS = 3;
+
+export function shouldRetryScenarioGeneration(attempt: number, failure: "validation" | "timeout"): boolean {
+  // A second, different validation defect still gets a correction. Timeouts
+  // retain their original single retry; the route also enforces its deadline.
+  return attempt < (failure === "validation" ? MAX_GENERATION_ATTEMPTS : 2);
+}
+
+export function scenarioGenerationErrorMessage(ticker: string, error: { message: string }): string {
+  return `Scenario generation for ${ticker} failed validation after automatic retries: ${error.message} Please retry.`;
+}
+
 export class ScenarioGenerationOutputError extends Error {
   readonly details: Record<string, unknown>;
 
@@ -165,7 +177,11 @@ export function parseScenarioGenerationOutput(output: string): Record<string, un
   }
   validateConditionalLikelihoodSets(parsed.companyEvents);
   if (!Array.isArray(parsed.scenarios) || parsed.scenarios.length !== 20) {
-    throw new ScenarioGenerationOutputError("Scenario JSON must contain exactly 20 scenarios");
+    const observedCount = Array.isArray(parsed.scenarios) ? parsed.scenarios.length : null;
+    throw new ScenarioGenerationOutputError(
+      `Scenario JSON must contain exactly 20 scenarios (received ${observedCount ?? "a non-array value"})`,
+      { check: "scenario-count", expectedCount: 20, observedCount },
+    );
   }
   validateEventDates(parsed.companyEvents, parsed.scenarios);
   if (!Array.isArray(parsed.signals) || parsed.signals.length !== 4) {

@@ -169,6 +169,21 @@ test("reports a required event selected in a non-occurring state", () => {
   });
 });
 
+test("reports the selected states that conflict with a required state", () => {
+  const raw = makeRawAnalysis();
+  raw.companyEvents[0].states[0].prerequisiteStateIds = ["event-2:occurs"];
+  assert.throws(() => processFixture(raw), (error) => {
+    assert.ok(error instanceof AnalysisValidationError);
+    assert.equal(error.details.scope, "scenario-generation");
+    assert.equal(error.details.check, "event-prerequisite-state");
+    assert.equal(error.details.eventId, "event-1");
+    assert.equal(error.details.eventStateId, "occurs");
+    assert.equal(error.details.requiredStateId, "event-2:occurs");
+    assert.ok((error.details.selectedStateIds as string[]).includes("event-2:absent"));
+    return true;
+  });
+});
+
 test("rejects incompatible export prohibition and unrestricted-sales states", () => {
   const raw = makeRawAnalysis();
   raw.companyEvents[0].states[0].label = "Export prohibited";

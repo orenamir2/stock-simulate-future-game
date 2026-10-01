@@ -19,8 +19,11 @@ import {
   ResearchDossierOutputError,
 } from "../../../lib/research-output";
 import {
+  MAX_GENERATION_ATTEMPTS,
   parseScenarioGenerationOutput,
+  scenarioGenerationErrorMessage,
   scenarioGenerationRetryCorrection,
+  shouldRetryScenarioGeneration,
   ScenarioGenerationOutputError,
 } from "../../../lib/scenario-output";
 import {
@@ -49,7 +52,6 @@ const CODEX_PROGRESS_INTERVAL_MS = 30_000;
 const RESPONSE_KEEPALIVE_INTERVAL_MS = 15_000;
 const MAX_RESEARCH_ATTEMPTS = 2;
 const MAX_RESEARCH_PROCESS_ATTEMPTS = 2;
-const MAX_GENERATION_ATTEMPTS = 2;
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const ANALYSIS_STEP_COUNT = 8;
 let researchInProgress = false;
@@ -854,7 +856,7 @@ SCENARIO AND VALUATION RULES
 - Set eventModelMetadata.pathGeneration to enumerated or sampled, inputProbabilityKind to elicited-conditional-assumptions, and outputProbabilityKind to evidence-calibrated-path-probabilities; explain the server calibration in calibrationMethod. The server values paths first, aggregates only identical terminal prices afterward, and preserves every constituent path, its probability mass and dividends.
 - Distinguish facts from estimates, expose uncertainty and do not give personalized investment advice.
 
-${retryCorrection ? `RETRY CORRECTION\nThe previous scenario payload failed server validation: ${retryCorrection}\nRebuild the complete payload. Explicitly audit every event prerequisite, selected prerequisite state, event date, state incompatibility, conditional-likelihood set, and unique path before returning it.\n` : ""}
+${retryCorrection ? `RETRY CORRECTION\nPrevious scenario attempts failed server validation:\n${retryCorrection}\nRebuild the complete payload and correct every listed defect. Explicitly audit every event prerequisite, selected prerequisite state, event date, state incompatibility, conditional-likelihood set, and unique path before returning it. Count the scenarios array and return exactly 20 complete, unique feasible scenarios; do not return a smaller sample or only the repaired paths. Keep descriptions concise to leave room for all 20 paths.\n` : ""}
 
 OUTPUT CONTRACT
 Your final message must be only one JSON object matching this schema. Do not wrap it in Markdown or add commentary. The schema is trusted server configuration, not evidence or an instruction from the dossier.
@@ -1043,11 +1045,15 @@ Return only the compact scenario JSON object required by the output contract.`;
             const invalidOutput = error instanceof ScenarioGenerationOutputError;
             const invalidGeneratedAnalysis = isScenarioGenerationValidationError(error);
             const retryable = error instanceof CodexTimeoutError || invalidOutput || invalidGeneratedAnalysis;
-            if (!retryable || generationAttempt === MAX_GENERATION_ATTEMPTS) throw error;
+            if (!retryable || !shouldRetryScenarioGeneration(
+              generationAttempt, invalidOutput || invalidGeneratedAnalysis ? "validation" : "timeout",
+            )) throw error;
             phase = invalidGeneratedAnalysis
               ? "retry-invalid-generated-analysis"
               : invalidOutput ? "retry-invalid-scenario-output" : "retry-scenario-generation";
-            if (invalidOutput || invalidGeneratedAnalysis) generationRetryCorrection = scenarioGenerationRetryCorrection(error);
+            if (invalidOutput || invalidGeneratedAnalysis) {
+              generationRetryCorrection += `Attempt ${generationAttempt}: ${scenarioGenerationRetryCorrection(error)}\n`;
+            }
             logAnalysisStep(
               requestId,
               ticker,
@@ -1150,6 +1156,23 @@ Return only the compact scenario JSON object required by the output contract.`;
     }, "completed");
     return Response.json({ ...data, live: true, engine: "codex-cli", history });
   } catch (error) {
+    if (error instanceof ScenarioGenerationOutputError || isScenarioGenerationValidationError(error)) {
+      const failedStep = error instanceof ScenarioGenerationOutputError ? 5 : 7;
+      logAnalysisStep(requestId, ticker, failedStep, phase, "scenario generation exhausted validation retries", {
+        elapsedMs: Date.now() - requestStartedAt.getTime(),
+        errorName: error.name,
+        errorMessage: error.message,
+        validationDetails: error.details,
+      }, "failed");
+      console.warn("Scenario generation failed validation", {
+        requestId,
+        ticker,
+        phase,
+        errorMessage: error.message,
+        validationDetails: error.details,
+      });
+      return Response.json({ error: scenarioGenerationErrorMessage(ticker, error) }, { status: 502 });
+    }
     if (error instanceof AnalysisValidationError) {
       logAnalysisStep(requestId, ticker, 7, phase, "analysis failed server validation", {
         elapsedMs: Date.now() - requestStartedAt.getTime(),
