@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM node:22.14.0-bookworm-slim AS runtime
 
-ARG CODEX_VERSION=0.144.4
+ARG CODEX_VERSION=0.165.0
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates \
@@ -26,7 +26,7 @@ ENV NODE_ENV=production \
     CODEX_HOME=/var/lib/codex \
     ANALYSIS_HISTORY_DIR=/var/lib/possible/analysis-history \
     CODEX_REASONING_EFFORT=low \
-    CODEX_GENERATION_REASONING_EFFORT=minimal \
+    CODEX_GENERATION_REASONING_EFFORT=low \
     CODEX_TIMEOUT_MS=1500000 \
     CODEX_IDLE_TIMEOUT_MS=480000 \
     CODEX_STARTUP_TIMEOUT_MS=120000 \

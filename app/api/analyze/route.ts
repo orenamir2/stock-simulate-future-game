@@ -172,7 +172,7 @@ function composeAnalysis(evidenceDossier: unknown, scenarioOutput: unknown): Jso
 }
 
 function codexReasoningEffort(codexStage: CodexStage): string {
-  const fallback = codexStage === "generation" ? "none" : "low";
+  const fallback = "low";
   const configured = (
     codexStage === "generation"
       ? process.env.CODEX_GENERATION_REASONING_EFFORT ?? process.env.CODEX_REASONING_EFFORT
